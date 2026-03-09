@@ -10,10 +10,27 @@ except ImportError:
     from types import ModuleType
     ssl = ModuleType("ssl")
     sys.modules["ssl"] = ssl
-    ssl.SSLContext = type("SSLContext", (), {})
+
+# Ensure ssl module has required attributes for httpx
+if not hasattr(ssl, "PROTOCOL_TLS_CLIENT"):
+    ssl.PROTOCOL_TLS_CLIENT = 16
+if not hasattr(ssl, "CERT_NONE"):
     ssl.CERT_NONE = 0
+if not hasattr(ssl, "CERT_REQUIRED"):
     ssl.CERT_REQUIRED = 2
+if not hasattr(ssl, "CERT_OPTIONAL"):
     ssl.CERT_OPTIONAL = 1
+
+if not hasattr(ssl, "SSLContext"):
+    class SSLContext:
+        def __init__(self, protocol=None):
+            self.verify_mode = ssl.CERT_NONE
+            self.check_hostname = False
+        def load_verify_locations(self, *args, **kwargs): pass
+        def set_default_verify_paths(self): pass
+        def set_ciphers(self, ciphers): pass
+        def wrap_socket(self, sock, **kwargs): return sock
+    ssl.SSLContext = SSLContext
 
 import httpx
 
