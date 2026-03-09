@@ -7,6 +7,10 @@ def generate():
         shutil.rmtree(dist_dir)
     os.makedirs(dist_dir)
 
+    # Copy favicon.png to dist
+    if os.path.exists("favicon.png"):
+        shutil.copy("favicon.png", os.path.join(dist_dir, "favicon.png"))
+
     with open("app.py", "r") as f:
         app_code = f.read()
 
@@ -35,6 +39,7 @@ def generate():
       content="width=device-width, initial-scale=1, shrink-to-fit=no"
     />
     <title>PUNK-SCOUT V1.0</title>
+    <link rel="icon" href="favicon.png" type="image/png" />
     <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.63.1/build/stlite.css"
