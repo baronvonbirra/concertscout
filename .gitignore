@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+streamlit.log
+/home/jules/verification/
+node_modules/
+.streamlit/
