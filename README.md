@@ -44,5 +44,18 @@ Run unit tests with mocks:
 python test_scout.py
 ```
 
-## 📅 Automation
-The scouting script is configured to run every Monday at 08:00 UTC via GitHub Actions. See `.github/workflows/scout_cron.yml`.
+## 📅 Automation & Deployment
+
+- **Scouting**: The scouting script runs every Monday at 08:00 UTC via GitHub Actions (`scout_cron.yml`).
+- **Web App**: The Streamlit interface is automatically deployed to **GitHub Pages** on every push to the `main` branch via GitHub Actions (`deploy.yml`).
+
+### How the Deployment Works
+The app is bundled into a static site using [stlite](https://github.com/whitphx/stlite), which allows Streamlit to run entirely in the browser using WebAssembly.
+1. `generate_static.py` creates a `dist/` directory.
+2. It generates an `index.html` that loads `stlite` and mounts `app.py`.
+3. GitHub Actions deploys the `dist/` folder to your repository's GitHub Pages site.
+
+### ⚠️ Security Note
+GitHub Pages is a public hosting service. When using this deployment method:
+- **Supabase credentials will be visible in the client-side code.**
+- Ensure that you use the **"anon" key** with **Row Level Security (RLS)** properly configured on your Supabase database to restrict access.
