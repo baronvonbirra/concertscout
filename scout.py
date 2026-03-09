@@ -117,6 +117,8 @@ def main():
     print(f"Found {len(core_artists)} core artists.")
 
     total_new = 0
+    core_names = {a['name'] for a in core_artists}
+
     for artist in core_artists:
         name = artist['name']
         print(f"--- Checking core artist: {name} ---")
@@ -130,6 +132,8 @@ def main():
         # 2. Discovery logic
         print(f"Finding similar punk artists for {name}...")
         similar_punks = get_similar_punk_artists(name)
+        # Filter out core artists from recommendations to prevent overwriting
+        similar_punks = [sa for sa in similar_punks if sa not in core_names]
         print(f"Found validated similar artists: {', '.join(similar_punks)}")
 
         for sa in similar_punks:

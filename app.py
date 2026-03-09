@@ -39,8 +39,9 @@ st.markdown("""
 
     /* Duct Tape Effect for Artist Name */
     .artist-name {
-        background-color: #FFFFFF;
-        color: #000000;
+        background-color: #000000;
+        color: #FFFFFF;
+        border: 2px solid #FFFFFF;
         padding: 5px 15px;
         display: inline-block;
         font-weight: bold;
