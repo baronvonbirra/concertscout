@@ -14,6 +14,10 @@ BANDSINTOWN_APP_ID = os.environ.get("BANDSINTOWN_APP_ID")
 
 if not all([SUPABASE_URL, SUPABASE_KEY]):
     print("Warning: Supabase credentials not fully set.")
+if not LASTFM_API_KEY:
+    print("Warning: LASTFM_API_KEY not set. Discovery will be skipped.")
+if not BANDSINTOWN_APP_ID:
+    print("Warning: BANDSINTOWN_APP_ID not set. Event fetching will be skipped.")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
@@ -54,7 +58,7 @@ def get_similar_punk_artists(artist_name):
     if not LASTFM_API_KEY:
         return []
 
-    similar_url = "http://ws.audioscrobbler.com/2.0/"
+    similar_url = "https://ws.audioscrobbler.com/2.0/"
     params = {
         "method": "artist.getsimilar",
         "artist": artist_name,
@@ -83,8 +87,13 @@ def get_similar_punk_artists(artist_name):
             tags = [t['name'].lower() for t in tags_data.get('toptags', {}).get('tag', [])]
 
             punk_keywords = ['punk', 'hardcore', 'crust', 'post-punk']
-            if any(keyword in ' '.join(tags) for keyword in punk_keywords):
+            is_punk = any(keyword in ' '.join(tags) for keyword in punk_keywords)
+
+            if is_punk:
+                print(f"  [PASSED] {sa} (Tags: {', '.join(tags[:5])}...)")
                 punk_artists.append(sa)
+            else:
+                print(f"  [FAILED] {sa} (Tags: {', '.join(tags[:5])}...)")
 
         return punk_artists
     except Exception as e:
