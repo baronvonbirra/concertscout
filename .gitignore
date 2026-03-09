@@ -5,3 +5,4 @@ streamlit.log
 /home/jules/verification/
 node_modules/
 .streamlit/
+dist/
