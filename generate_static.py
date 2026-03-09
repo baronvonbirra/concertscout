@@ -12,7 +12,8 @@ def generate():
 
     # Define minimal requirements for the app.py to run in stlite
     # Note: 'streamlit' is built into stlite. 'requests' is not needed by app.py.
-    requirements = ['supabase==2.4.5', 'python-dotenv', 'pandas']
+    # Pinning supabase and httpx to ensure stability in stlite/pyodide environment.
+    requirements = ['supabase==2.4.5', 'httpx==0.27.2', 'python-dotenv', 'pandas']
 
     # IMPORTANT: GitHub Pages is a public hosting service.
     # The following credentials will be visible to any user who visits the site.

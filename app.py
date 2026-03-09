@@ -1,6 +1,20 @@
 import streamlit as st
 import pandas as pd
 import os
+import sys
+
+# Mock ssl module for stlite/pyodide environment
+try:
+    import ssl
+except ImportError:
+    from types import ModuleType
+    ssl = ModuleType("ssl")
+    sys.modules["ssl"] = ssl
+    ssl.SSLContext = type("SSLContext", (), {})
+    ssl.CERT_NONE = 0
+    ssl.CERT_REQUIRED = 2
+    ssl.CERT_OPTIONAL = 1
+
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
