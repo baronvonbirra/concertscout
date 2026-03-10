@@ -51,7 +51,7 @@ except ImportError:
 
 try:
     from pyodide_httpx import patch_httpx
-    patch_httpx()
+    patch_httpx(sync_client=True)
 except ImportError:
     pass
 
@@ -75,7 +75,7 @@ httpx.AsyncClient.__init__ = _patched_async_client_init
 import streamlit as st
 import pandas as pd
 import os
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -155,7 +155,7 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 @st.cache_resource
 def get_supabase_client():
     if SUPABASE_URL and SUPABASE_KEY:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
+        return create_client(SUPABASE_URL, SUPABASE_KEY, options=ClientOptions(realtime=None))
     return None
 
 supabase = get_supabase_client()
