@@ -21,11 +21,17 @@ if not hasattr(ssl, "CERT_REQUIRED"):
 if not hasattr(ssl, "CERT_OPTIONAL"):
     ssl.CERT_OPTIONAL = 1
 
+if not hasattr(ssl, "TLSVersion"):
+    class TLSVersion:
+        TLSv1_2 = 771
+    ssl.TLSVersion = TLSVersion
+
 if not hasattr(ssl, "SSLContext"):
     class SSLContext:
         def __init__(self, protocol=None):
             self.verify_mode = ssl.CERT_NONE
             self.check_hostname = False
+            self.minimum_version = None
         def load_verify_locations(self, *args, **kwargs): pass
         def set_default_verify_paths(self): pass
         def set_ciphers(self, ciphers): pass
