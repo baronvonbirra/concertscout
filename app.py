@@ -67,9 +67,11 @@ class PyodideTransport(httpx.BaseTransport):
             # Synchronous mode (third param is False)
             xhr.open(request.method, str(request.url), False)
 
-            # Set headers
+            # Set headers (filtering forbidden headers)
+            forbidden_headers = {"host", "accept-encoding", "connection", "user-agent", "content-length", "expect", "referer", "origin"}
             for name, value in request.headers.items():
-                xhr.setRequestHeader(name, value)
+                if name.lower() not in forbidden_headers and not name.lower().startswith(("sec-", "proxy-")):
+                    xhr.setRequestHeader(name, value)
 
             xhr.responseType = "arraybuffer"
 
@@ -87,7 +89,10 @@ class PyodideTransport(httpx.BaseTransport):
                 for line in header_str.strip().split('\r\n'):
                     if ':' in line:
                         k, v = line.split(':', 1)
-                        resp_headers.append((k.strip(), v.strip()))
+                        k_lower = k.strip().lower()
+                        # Browser/XHR automatically decompresses; remove these to prevent httpx from trying again
+                        if k_lower not in ["content-encoding", "content-length", "transfer-encoding"]:
+                            resp_headers.append((k.strip(), v.strip()))
 
             # Get content as bytes
             if xhr.response:
