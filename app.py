@@ -49,11 +49,6 @@ try:
 except ImportError:
     pass
 
-try:
-    from pyodide_httpx import patch_httpx
-    patch_httpx(sync_client=True)
-except ImportError:
-    pass
 
 # 3. HTTPX SETUP & HTTP/2 DISABLE PATCH
 import httpx
