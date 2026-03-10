@@ -8,11 +8,25 @@ ssl_mock.PROTOCOL_TLS_CLIENT = 16
 ssl_mock.CERT_NONE = 0
 ssl_mock.CERT_REQUIRED = 2
 ssl_mock.CERT_OPTIONAL = 1
+ssl_mock.OP_NO_COMPRESSION = 0
+ssl_mock.OP_NO_SSLv2 = 0
+ssl_mock.OP_NO_SSLv3 = 0
+ssl_mock.OP_NO_TLSv1 = 0
+ssl_mock.OP_NO_TLSv1_1 = 0
+ssl_mock.OP_ALL = 0
+ssl_mock.HAS_ALPN = False
+
+class TLSVersion:
+    TLSv1_2 = 771
+ssl_mock.TLSVersion = TLSVersion
 
 class MockSSLContext:
+    options = 0
     def __init__(self, protocol=None):
         self.verify_mode = ssl_mock.CERT_NONE
         self.check_hostname = False
+        self.minimum_version = None
+        self.options = 0
     def load_verify_locations(self, *args, **kwargs): pass
     def set_default_verify_paths(self): pass
     def set_ciphers(self, ciphers): pass
@@ -22,7 +36,14 @@ class MockSSLContext:
 ssl_mock.SSLContext = MockSSLContext
 sys.modules["ssl"] = ssl_mock
 
-# 2. HTTPX PATCHING (To avoid 'h2' dependency and ensure it uses our mock)
+# 2. NETWORK PATCHING (To use browser fetch API in stlite/pyodide)
+try:
+    from pyodide_httpx import patch_httpx
+    patch_httpx()
+except ImportError:
+    pass
+
+# 3. HTTPX PATCHING (To avoid 'h2' dependency and ensure it uses our mock)
 import httpx
 _orig_client_init = httpx.Client.__init__
 def _patched_client_init(self, *args, **kwargs):
