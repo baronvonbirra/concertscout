@@ -1,7 +1,7 @@
 import sys
 from types import ModuleType
 
-# 1. IMMEDIATE SSL MOCKING (Must be before any other imports)
+# 1. IMMEDIATE SSL MOCKING
 # This handles the stlite/pyodide environment where the 'ssl' module is missing or crippled.
 ssl_mock = ModuleType("ssl")
 ssl_mock.PROTOCOL_TLS_CLIENT = 16
@@ -15,6 +15,7 @@ ssl_mock.OP_NO_TLSv1 = 0
 ssl_mock.OP_NO_TLSv1_1 = 0
 ssl_mock.OP_ALL = 0
 ssl_mock.HAS_ALPN = False
+ssl_mock.HAS_SNI = True
 
 class TLSVersion:
     TLSv1_2 = 771
@@ -36,28 +37,38 @@ class MockSSLContext:
 ssl_mock.SSLContext = MockSSLContext
 sys.modules["ssl"] = ssl_mock
 
-# 2. NETWORK PATCHING (To use browser fetch API in stlite/pyodide)
+# 2. NETWORK PATCHING
+# Force use of browser fetch API. pyodide-http handles requests, pyodide-httpx handles httpx.
+try:
+    import pyodide_http
+    pyodide_http.patch_all()
+except ImportError:
+    pass
+
 try:
     from pyodide_httpx import patch_httpx
     patch_httpx()
 except ImportError:
     pass
 
-# 3. HTTPX PATCHING (To avoid 'h2' dependency and ensure it uses our mock)
-import httpx
-_orig_client_init = httpx.Client.__init__
-def _patched_client_init(self, *args, **kwargs):
-    kwargs.pop("http2", None)
-    kwargs["http2"] = False
-    return _orig_client_init(self, *args, **kwargs)
-httpx.Client.__init__ = _patched_client_init
+# 3. HTTPX PATCHING (To avoid 'h2' dependency)
+try:
+    import httpx
+    _orig_client_init = httpx.Client.__init__
+    def _patched_client_init(self, *args, **kwargs):
+        kwargs.pop("http2", None)
+        kwargs["http2"] = False
+        return _orig_client_init(self, *args, **kwargs)
+    httpx.Client.__init__ = _patched_client_init
 
-_orig_async_client_init = httpx.AsyncClient.__init__
-def _patched_async_client_init(self, *args, **kwargs):
-    kwargs.pop("http2", None)
-    kwargs["http2"] = False
-    return _orig_async_client_init(self, *args, **kwargs)
-httpx.AsyncClient.__init__ = _patched_async_client_init
+    _orig_async_client_init = httpx.AsyncClient.__init__
+    def _patched_async_client_init(self, *args, **kwargs):
+        kwargs.pop("http2", None)
+        kwargs["http2"] = False
+        return _orig_async_client_init(self, *args, **kwargs)
+    httpx.AsyncClient.__init__ = _patched_async_client_init
+except ImportError:
+    pass
 
 # Now import the rest of the dependencies
 import streamlit as st
