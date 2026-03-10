@@ -33,6 +33,9 @@ if not hasattr(ssl, "OP_NO_TLSv1_1"):
 if not hasattr(ssl, "OP_ALL"):
     ssl.OP_ALL = 0
 
+if not hasattr(ssl, "HAS_ALPN"):
+    ssl.HAS_ALPN = False
+
 if not hasattr(ssl, "TLSVersion"):
     class TLSVersion:
         TLSv1_2 = 771
