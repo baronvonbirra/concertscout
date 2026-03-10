@@ -55,6 +55,13 @@ if not hasattr(ssl, "SSLContext") or not hasattr(ssl.SSLContext, "options"):
         def wrap_socket(self, sock, **kwargs): return sock
     ssl.SSLContext = SSLContext
 
+# Patch httpx to use browser fetch API in stlite/pyodide
+try:
+    from pyodide_httpx import patch_httpx
+    patch_httpx()
+except ImportError:
+    pass
+
 import httpx
 
 # Force http2=False for all httpx clients to avoid ImportError in stlite/pyodide
