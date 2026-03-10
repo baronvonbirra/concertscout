@@ -1,71 +1,62 @@
-import streamlit as st
-import pandas as pd
-import os
 import sys
+from types import ModuleType
 
-# Mock ssl module for stlite/pyodide environment
+# 1. COMPREHENSIVE SSL MOCK (MUST BE AT ABSOLUTE TOP)
 try:
     import ssl
 except ImportError:
-    from types import ModuleType
     ssl = ModuleType("ssl")
     sys.modules["ssl"] = ssl
 
-# Ensure ssl module has required attributes for httpx
-if not hasattr(ssl, "PROTOCOL_TLS_CLIENT"):
-    ssl.PROTOCOL_TLS_CLIENT = 16
-if not hasattr(ssl, "CERT_NONE"):
-    ssl.CERT_NONE = 0
-if not hasattr(ssl, "CERT_REQUIRED"):
-    ssl.CERT_REQUIRED = 2
-if not hasattr(ssl, "CERT_OPTIONAL"):
-    ssl.CERT_OPTIONAL = 1
-if not hasattr(ssl, "OP_NO_COMPRESSION"):
-    ssl.OP_NO_COMPRESSION = 0
-if not hasattr(ssl, "OP_NO_SSLv2"):
-    ssl.OP_NO_SSLv2 = 0
-if not hasattr(ssl, "OP_NO_SSLv3"):
-    ssl.OP_NO_SSLv3 = 0
-if not hasattr(ssl, "OP_NO_TLSv1"):
-    ssl.OP_NO_TLSv1 = 0
-if not hasattr(ssl, "OP_NO_TLSv1_1"):
-    ssl.OP_NO_TLSv1_1 = 0
-if not hasattr(ssl, "OP_ALL"):
-    ssl.OP_ALL = 0
+# Ensure ssl module has all required attributes for httpx and other libraries
+ssl.PROTOCOL_TLS_CLIENT = 16
+ssl.CERT_NONE = 0
+ssl.CERT_REQUIRED = 2
+ssl.CERT_OPTIONAL = 1
+ssl.OP_NO_COMPRESSION = 0
+ssl.OP_NO_SSLv2 = 0
+ssl.OP_NO_SSLv3 = 0
+ssl.OP_NO_TLSv1 = 0
+ssl.OP_NO_TLSv1_1 = 0
+ssl.OP_ALL = 0
+ssl.HAS_ALPN = False
+ssl.HAS_SNI = True
 
-if not hasattr(ssl, "HAS_ALPN"):
-    ssl.HAS_ALPN = False
-
-if not hasattr(ssl, "TLSVersion"):
-    class TLSVersion:
-        TLSv1_2 = 771
-    ssl.TLSVersion = TLSVersion
+class TLSVersion:
+    TLSv1_2 = 771
+    TLSv1_3 = 772
+ssl.TLSVersion = TLSVersion
 
 if not hasattr(ssl, "SSLContext") or not hasattr(ssl.SSLContext, "options"):
-    class SSLContext:
-        options = 0
+    class MockSSLContext:
         def __init__(self, protocol=None):
             self.verify_mode = ssl.CERT_NONE
             self.check_hostname = False
             self.minimum_version = None
+            self.maximum_version = None
             self.options = 0
         def load_verify_locations(self, *args, **kwargs): pass
         def set_default_verify_paths(self): pass
         def set_ciphers(self, ciphers): pass
+        def set_alpn_protocols(self, protocols): pass
         def wrap_socket(self, sock, **kwargs): return sock
-    ssl.SSLContext = SSLContext
+    ssl.SSLContext = MockSSLContext
 
-# Patch httpx to use browser fetch API in stlite/pyodide
+# 2. NETWORK PATCHING (BEFORE ANY OTHER IMPORTS)
+try:
+    import pyodide_http
+    pyodide_http.patch_all()
+except ImportError:
+    pass
+
 try:
     from pyodide_httpx import patch_httpx
     patch_httpx()
 except ImportError:
     pass
 
+# 3. HTTPX SETUP & HTTP/2 DISABLE PATCH
 import httpx
-
-# Force http2=False for all httpx clients to avoid ImportError in stlite/pyodide
-# where the 'h2' package is not available and browser fetch handles HTTP/2.
 _orig_client_init = httpx.Client.__init__
 def _patched_client_init(self, *args, **kwargs):
     kwargs.pop("http2", None)
@@ -80,6 +71,10 @@ def _patched_async_client_init(self, *args, **kwargs):
     return _orig_async_client_init(self, *args, **kwargs)
 httpx.AsyncClient.__init__ = _patched_async_client_init
 
+# 4. STANDARD IMPORTS
+import streamlit as st
+import pandas as pd
+import os
 from supabase import create_client, Client
 from dotenv import load_dotenv
 

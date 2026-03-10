@@ -7,3 +7,5 @@ Collecting usage statistics. To deactivate, set browser.gatherUsageStats to fals
   Local URL: http://localhost:8501
   Network URL: http://192.168.0.2:8501
   External URL: http://34.46.237.233:8501
+
+  Stopping...
