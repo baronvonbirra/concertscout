@@ -20,18 +20,32 @@ if not hasattr(ssl, "CERT_REQUIRED"):
     ssl.CERT_REQUIRED = 2
 if not hasattr(ssl, "CERT_OPTIONAL"):
     ssl.CERT_OPTIONAL = 1
+if not hasattr(ssl, "OP_NO_COMPRESSION"):
+    ssl.OP_NO_COMPRESSION = 0
+if not hasattr(ssl, "OP_NO_SSLv2"):
+    ssl.OP_NO_SSLv2 = 0
+if not hasattr(ssl, "OP_NO_SSLv3"):
+    ssl.OP_NO_SSLv3 = 0
+if not hasattr(ssl, "OP_NO_TLSv1"):
+    ssl.OP_NO_TLSv1 = 0
+if not hasattr(ssl, "OP_NO_TLSv1_1"):
+    ssl.OP_NO_TLSv1_1 = 0
+if not hasattr(ssl, "OP_ALL"):
+    ssl.OP_ALL = 0
 
 if not hasattr(ssl, "TLSVersion"):
     class TLSVersion:
         TLSv1_2 = 771
     ssl.TLSVersion = TLSVersion
 
-if not hasattr(ssl, "SSLContext"):
+if not hasattr(ssl, "SSLContext") or not hasattr(ssl.SSLContext, "options"):
     class SSLContext:
+        options = 0
         def __init__(self, protocol=None):
             self.verify_mode = ssl.CERT_NONE
             self.check_hostname = False
             self.minimum_version = None
+            self.options = 0
         def load_verify_locations(self, *args, **kwargs): pass
         def set_default_verify_paths(self): pass
         def set_ciphers(self, ciphers): pass
