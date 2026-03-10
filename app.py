@@ -25,6 +25,7 @@ ssl.HAS_SNI = True
 class TLSVersion:
     TLSv1_2 = 771
     TLSv1_3 = 772
+    SSLv3 = 768
 ssl.TLSVersion = TLSVersion
 
 if not hasattr(ssl, "SSLContext") or not hasattr(ssl.SSLContext, "options"):
@@ -52,10 +53,66 @@ except ImportError:
 
 # 3. HTTPX SETUP & HTTP/2 DISABLE PATCH
 import httpx
+
+# Custom Transport for Pyodide using XMLHttpRequest (Synchronous)
+class PyodideTransport(httpx.BaseTransport):
+    def handle_request(self, request):
+        try:
+            from js import XMLHttpRequest, Uint8Array
+        except ImportError:
+            raise httpx.ConnectError("Pyodide (js) not found")
+
+        try:
+            xhr = XMLHttpRequest.new()
+            # Synchronous mode (third param is False)
+            xhr.open(request.method, str(request.url), False)
+
+            # Set headers
+            for name, value in request.headers.items():
+                xhr.setRequestHeader(name, value)
+
+            xhr.responseType = "arraybuffer"
+
+            # Send body if present
+            if request.content:
+                # Use Uint8Array.from to convert bytes to JS-compatible format
+                xhr.send(Uint8Array.from_(list(request.content)))
+            else:
+                xhr.send()
+
+            # Parse headers
+            resp_headers = []
+            header_str = xhr.getAllResponseHeaders()
+            if header_str:
+                for line in header_str.strip().split('\r\n'):
+                    if ':' in line:
+                        k, v = line.split(':', 1)
+                        resp_headers.append((k.strip(), v.strip()))
+
+            # Get content as bytes
+            if xhr.response:
+                resp_content = bytes(Uint8Array.new(xhr.response))
+            else:
+                resp_content = b""
+
+            return httpx.Response(
+                status_code=xhr.status,
+                headers=resp_headers,
+                content=resp_content,
+                request=request
+            )
+        except Exception as e:
+            raise httpx.ConnectError(str(e))
+
+# Check if we are in Pyodide
+IS_PYODIDE = "pyodide" in sys.modules or (hasattr(sys, "platform") and sys.platform == "emscripten")
+
 _orig_client_init = httpx.Client.__init__
 def _patched_client_init(self, *args, **kwargs):
     kwargs.pop("http2", None)
     kwargs["http2"] = False
+    if IS_PYODIDE and "transport" not in kwargs:
+        kwargs["transport"] = PyodideTransport()
     return _orig_client_init(self, *args, **kwargs)
 httpx.Client.__init__ = _patched_client_init
 
