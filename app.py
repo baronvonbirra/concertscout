@@ -1,41 +1,29 @@
-import streamlit as st
-import pandas as pd
-import os
 import sys
+from types import ModuleType
 
-# Mock ssl module for stlite/pyodide environment
-try:
-    import ssl
-except ImportError:
-    from types import ModuleType
-    ssl = ModuleType("ssl")
-    sys.modules["ssl"] = ssl
+# 1. IMMEDIATE SSL MOCKING (Must be before any other imports)
+# This handles the stlite/pyodide environment where the 'ssl' module is missing or crippled.
+ssl_mock = ModuleType("ssl")
+ssl_mock.PROTOCOL_TLS_CLIENT = 16
+ssl_mock.CERT_NONE = 0
+ssl_mock.CERT_REQUIRED = 2
+ssl_mock.CERT_OPTIONAL = 1
 
-# Ensure ssl module has required attributes for httpx
-if not hasattr(ssl, "PROTOCOL_TLS_CLIENT"):
-    ssl.PROTOCOL_TLS_CLIENT = 16
-if not hasattr(ssl, "CERT_NONE"):
-    ssl.CERT_NONE = 0
-if not hasattr(ssl, "CERT_REQUIRED"):
-    ssl.CERT_REQUIRED = 2
-if not hasattr(ssl, "CERT_OPTIONAL"):
-    ssl.CERT_OPTIONAL = 1
+class MockSSLContext:
+    def __init__(self, protocol=None):
+        self.verify_mode = ssl_mock.CERT_NONE
+        self.check_hostname = False
+    def load_verify_locations(self, *args, **kwargs): pass
+    def set_default_verify_paths(self): pass
+    def set_ciphers(self, ciphers): pass
+    def wrap_socket(self, sock, **kwargs): return sock
+    def set_alpn_protocols(self, protocols): pass
 
-if not hasattr(ssl, "SSLContext"):
-    class SSLContext:
-        def __init__(self, protocol=None):
-            self.verify_mode = ssl.CERT_NONE
-            self.check_hostname = False
-        def load_verify_locations(self, *args, **kwargs): pass
-        def set_default_verify_paths(self): pass
-        def set_ciphers(self, ciphers): pass
-        def wrap_socket(self, sock, **kwargs): return sock
-    ssl.SSLContext = SSLContext
+ssl_mock.SSLContext = MockSSLContext
+sys.modules["ssl"] = ssl_mock
 
+# 2. HTTPX PATCHING (To avoid 'h2' dependency and ensure it uses our mock)
 import httpx
-
-# Force http2=False for all httpx clients to avoid ImportError in stlite/pyodide
-# where the 'h2' package is not available and browser fetch handles HTTP/2.
 _orig_client_init = httpx.Client.__init__
 def _patched_client_init(self, *args, **kwargs):
     kwargs.pop("http2", None)
@@ -50,6 +38,10 @@ def _patched_async_client_init(self, *args, **kwargs):
     return _orig_async_client_init(self, *args, **kwargs)
 httpx.AsyncClient.__init__ = _patched_async_client_init
 
+# Now import the rest of the dependencies
+import streamlit as st
+import pandas as pd
+import os
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
