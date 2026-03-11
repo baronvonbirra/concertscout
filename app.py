@@ -137,9 +137,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-st.set_page_config(page_title="PUNK-SCOUT V1.0", layout="wide")
+st.set_page_config(page_title="PUNK-SCOUT V2.0", layout="wide")
 
-# CUSTOM CSS FOR PUNK ZINE AESTHETIC
+# CUSTOM CSS FOR PUNK ZINE AESTHETIC V2
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Special+Elite&display=swap');
@@ -147,17 +147,25 @@ st.markdown("""
     /* Global Background and Text */
     .stApp {
         background-color: #000000;
-        background-image: url("https://www.transparenttextures.com/patterns/carbon-fibre.png"); /* Subtle noise texture */
+        background-image:
+            url("https://www.transparenttextures.com/patterns/carbon-fibre.png"), /* Carbon fibre texture */
+            url("https://www.transparenttextures.com/patterns/pinstriped-suit.png"); /* Xerox-like grain */
         color: #FFFFFF;
         font-family: 'Courier New', Courier, monospace;
     }
 
-    /* Headers */
+    /* Headers with Duct Tape effect */
     h1, h2, h3 {
         color: #E60000 !important; /* Anarchy Red */
         font-family: 'Special Elite', cursive !important;
         text-transform: uppercase;
         letter-spacing: 2px;
+        background-color: #000000;
+        display: inline-block;
+        padding: 5px 20px;
+        border: 4px solid #FFFFFF;
+        box-shadow: 5px 5px 0px #E60000;
+        margin-bottom: 20px;
     }
 
     /* Cards */
@@ -166,19 +174,56 @@ st.markdown("""
         padding: 20px;
         margin-bottom: 20px;
         background-color: #000000;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .concert-card::before {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: url("https://www.transparenttextures.com/patterns/asfalt-dark.png");
+        opacity: 0.2;
+        pointer-events: none;
     }
 
     /* Duct Tape Effect for Artist Name */
     .artist-name {
-        background-color: #000000;
-        color: #FFFFFF;
-        border: 2px solid #FFFFFF;
+        background-color: #FFFFFF;
+        color: #000000;
         padding: 5px 15px;
         display: inline-block;
         font-weight: bold;
-        transform: rotate(-2deg);
+        transform: rotate(-1.5deg);
         font-size: 1.5rem;
-        margin-bottom: 10px;
+        margin-bottom: 15px;
+        box-shadow: 3px 3px 0px #39FF14;
+    }
+
+    /* Badges */
+    .badge {
+        padding: 2px 8px;
+        font-weight: bold;
+        text-transform: uppercase;
+        font-size: 0.8rem;
+        display: inline-block;
+        margin-right: 5px;
+        margin-bottom: 5px;
+    }
+
+    .badge-leak {
+        background-color: #E60000;
+        color: #FFFFFF;
+        animation: blinker 1s linear infinite;
+    }
+
+    @keyframes blinker {
+        50% { opacity: 0; }
+    }
+
+    .badge-proximity {
+        background-color: #FFFF00;
+        color: #000000;
     }
 
     /* Tickets Button */
@@ -191,11 +236,20 @@ st.markdown("""
         border: 2px solid #000000;
         display: inline-block;
         margin-top: 10px;
+        box-shadow: 4px 4px 0px #FFFFFF;
     }
 
     .ticket-btn:hover {
         background-color: #FFFFFF;
         color: #000000;
+        box-shadow: 4px 4px 0px #39FF14;
+    }
+
+    .source-footer {
+        font-size: 0.7rem;
+        color: #888888;
+        margin-top: 15px;
+        font-style: italic;
     }
 
     /* Layout Spacing */
@@ -220,23 +274,51 @@ supabase = get_supabase_client()
 def fetch_events():
     if not supabase:
         return pd.DataFrame()
-    response = supabase.table("events").select("*").order("date").execute()
+    response = supabase.table("events").select("*").execute()
     return pd.DataFrame(response.data)
 
-def display_event_card(row):
+def fetch_artists():
+    if not supabase:
+        return pd.DataFrame()
+    response = supabase.table("artists").select("name, last_linktree_snapshot, priority_level").execute()
+    return pd.DataFrame(response.data)
+
+def display_event_card(row, has_leak=False):
+    badges = ""
+    if has_leak:
+        badges += '<span class="badge badge-leak">FAST-PASS / LEAK</span>'
+    if row.get('is_proximity'):
+        badges += '<span class="badge badge-proximity">BORDER CROSSER 🇵🇹/🇫🇷</span>'
+
+    source_icon = "🎸" # Default
+    if "Bandsintown" in str(row.get('source', '')):
+        source_icon = "🎫"
+
     st.markdown(f"""
     <div class="concert-card">
+        {badges}
         <div class="artist-name">{row['artist']}</div>
         <div style="font-size: 1.2rem; font-weight: bold; margin-bottom: 5px;">📍 {row['city']} - {row['venue']}</div>
         <div style="font-size: 1rem; color: #39FF14;">📅 {row['date']}</div>
         <a href="{row['ticket_url']}" target="_blank" class="ticket-btn">GET TICKETS</a>
+        <div class="source-footer">{source_icon} SOURCE: {row.get('source', 'UNKNOWN')}</div>
     </div>
     """, unsafe_allow_html=True)
 
 def main():
-    st.title("PUNK-SCOUT V1.0")
+    st.title("PUNK-SCOUT V2.0")
 
     events_df = fetch_events()
+    artists_df = fetch_artists()
+
+    # Simple logic to identify "leaks": artists with high priority and linktree snapshots
+    # (In a real scenario, we might track if the snapshot changed RECENTLY)
+    # For now, let's say if priority is high, we show the badge as it's been "sniffed"
+    leaky_artists = set()
+    if not artists_df.empty:
+        leaky_artists = set(artists_df[
+            (artists_df['priority_level'].str.lower().isin(['high', '10', 'top']))
+        ]['name'])
 
     if events_df.empty:
         st.write("NO TOURS FOUND YET. KEEP REBELLIOUS.")
@@ -251,7 +333,7 @@ def main():
             st.header("THE PIT (CORE)")
             if not core_events.empty:
                 for _, row in core_events.iterrows():
-                    display_event_card(row)
+                    display_event_card(row, has_leak=row['artist'] in leaky_artists)
             else:
                 st.write("EMPTY PIT.")
 
@@ -259,7 +341,7 @@ def main():
             st.header("THE DISTRO (DISTRO/RECS)")
             if not rec_events.empty:
                 for _, row in rec_events.iterrows():
-                    display_event_card(row)
+                    display_event_card(row, has_leak=row['artist'] in leaky_artists)
             else:
                 st.write("NO RECOMMENDATIONS.")
 

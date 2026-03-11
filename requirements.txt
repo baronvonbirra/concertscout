@@ -3,3 +3,4 @@ supabase==2.4.5
 python-dotenv
 pandas
 streamlit
+beautifulsoup4

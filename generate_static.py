@@ -38,7 +38,7 @@ def generate():
       name="viewport"
       content="width=device-width, initial-scale=1, shrink-to-fit=no"
     />
-    <title>PUNK-SCOUT V1.0</title>
+    <title>PUNK-SCOUT V2.0</title>
     <link rel="icon" href="favicon.png" type="image/png" />
     <link
       rel="stylesheet"
