@@ -131,6 +131,7 @@ httpx.AsyncClient.__init__ = _patched_async_client_init
 # 4. STANDARD IMPORTS
 import streamlit as st
 import pandas as pd
+import textwrap
 import os
 from supabase import create_client, Client, ClientOptions
 from dotenv import load_dotenv
@@ -294,16 +295,16 @@ def display_event_card(row, has_leak=False):
     if "Bandsintown" in str(row.get('source', '')):
         source_icon = "🎫"
 
-    st.markdown(f"""
+    st.markdown(textwrap.dedent(f"""
     <div class="concert-card">
         {badges}
         <div class="artist-name">{row['artist']}</div>
         <div style="font-size: 1.2rem; font-weight: bold; margin-bottom: 5px;">📍 {row['city']} - {row['venue']}</div>
         <div style="font-size: 1rem; color: #39FF14;">📅 {row['date']}</div>
-        <a href="{row['ticket_url']}" target="_blank" class="ticket-btn">GET TICKETS</a>
-        <div class="source-footer">{source_icon} SOURCE: {row.get('source', 'UNKNOWN')}</div>
+        <a href="{row.get('ticket_url') or '#'}" target="_blank" class="ticket-btn">GET TICKETS</a>
+        <div class="source-footer">{source_icon} SOURCE: {row.get('source') or 'UNKNOWN'}</div>
     </div>
-    """, unsafe_allow_html=True)
+    """), unsafe_allow_html=True)
 
 def main():
     st.title("PUNK-SCOUT V2.0")
