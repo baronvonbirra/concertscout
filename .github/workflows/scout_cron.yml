@@ -1,8 +1,8 @@
-name: Last-Scout Weekly Run
+name: Last-Scout 2-Day Run
 
 on:
   schedule:
-    - cron: '0 8 * * 1'  # Every Monday at 08:00 UTC
+    - cron: '0 0 */2 * *'  # Every 2 days at 00:00 UTC
   workflow_dispatch:      # Allow manual trigger
 
 jobs:
@@ -28,4 +28,5 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           BANDSINTOWN_APP_ID: ${{ secrets.BANDSINTOWN_APP_ID }}
+          SONGKICK_API_KEY: ${{ secrets.SONGKICK_API_KEY }}
         run: python scout.py
