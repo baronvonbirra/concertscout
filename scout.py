@@ -27,10 +27,18 @@ def get_core_artists():
     response = supabase.table("artists").select("*").eq("is_core", True).execute()
     return response.data
 
-def fetch_bandsintown_events(artist_name):
+def get_artists_patches():
+    if not supabase:
+        return {}
+    response = supabase.table("artists").select("name, bandsintown_patch").execute()
+    return {a['name']: a['bandsintown_patch'] for a in response.data if a.get('bandsintown_patch')}
+
+def fetch_bandsintown_events(artist_name, patch=None):
     if not BANDSINTOWN_APP_ID:
         return []
-    url = f"https://rest.bandsintown.com/artists/{artist_name}/events"
+
+    artist_id = patch if patch else artist_name
+    url = f"https://rest.bandsintown.com/artists/{artist_id}/events"
     params = {"app_id": BANDSINTOWN_APP_ID}
     try:
         response = requests.get(url, params=params)
@@ -125,15 +133,20 @@ def main():
     core_artists = get_core_artists()
     print(f"Found {len(core_artists)} core artists.")
 
+    # Get all available patches
+    patches = get_artists_patches()
+
     total_new = 0
     core_names = {a['name'] for a in core_artists}
 
     for artist in core_artists:
         name = artist['name']
+        patch = artist.get('bandsintown_patch')
         print(f"--- Checking core artist: {name} ---")
 
         # 1. Core artist events
-        core_events = fetch_bandsintown_events(name)
+        print(f"Fetching events for core artist: {name}...")
+        core_events = fetch_bandsintown_events(name, patch=patch)
         new_core = upsert_events(core_events, False)
         total_new += new_core
         print(f"Upserted {new_core} core events for {name}.")
@@ -146,7 +159,9 @@ def main():
         print(f"Found validated similar artists: {', '.join(similar_punks)}")
 
         for sa in similar_punks:
-            sa_events = fetch_bandsintown_events(sa)
+            print(f"Checking events for similar artist: {sa}...")
+            sa_patch = patches.get(sa)
+            sa_events = fetch_bandsintown_events(sa, patch=sa_patch)
             new_rec = upsert_events(sa_events, True)
             total_new += new_rec
             if new_rec > 0:
