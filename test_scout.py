@@ -30,6 +30,21 @@ class TestScout(unittest.TestCase):
         self.assertEqual(events[0]['artist'], "Bad Religion")
 
     @patch('scout.requests.get')
+    def test_fetch_bandsintown_events_with_patch(self, mock_get):
+        # Mock Bandsintown response
+        mock_response = MagicMock()
+        mock_response.json.return_value = []
+        mock_get.return_value = mock_response
+
+        with patch('scout.BANDSINTOWN_APP_ID', 'test_id'):
+            scout.fetch_bandsintown_events("Levi Meredith", patch="LeviMeredithPatch")
+
+        # Verify the URL used the patch
+        args, kwargs = mock_get.call_args
+        self.assertIn("LeviMeredithPatch", args[0])
+        self.assertNotIn("Levi%20Meredith", args[0])
+
+    @patch('scout.requests.get')
     def test_get_similar_punk_artists(self, mock_get):
         # Mock Last.fm responses
         def side_effect(url, params=None):
