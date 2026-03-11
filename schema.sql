@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS artists (
     bandsintown_patch TEXT,
     linktree_url TEXT,
     last_linktree_snapshot TEXT,
-    priority_level TEXT
+    priority_level TEXT,
+    last_checked TIMESTAMP WITH TIME ZONE
 );
 
 -- Events table

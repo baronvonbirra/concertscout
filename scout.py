@@ -25,6 +25,14 @@ if not BANDSINTOWN_APP_ID:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
+# Limits and Rate Limiting
+LAST_FM_LOOKUP_LIMIT = 20
+TOTAL_SCAN_LIMIT = 200
+RATE_LIMIT_DELAY = 0.5
+
+# Global counters
+last_fm_lookups_performed = 0
+
 # Summary dictionary for Mission 6
 summary = {
     "new_spain_tours": 0,
@@ -38,6 +46,28 @@ def get_core_artists():
         return []
     response = supabase.table("artists").select("*").eq("is_core", True).execute()
     return response.data
+
+def get_rotation_artists(limit):
+    if not supabase:
+        return []
+    # Fetch non-core artists ordered by last_checked ASC, nulls first
+    response = (supabase.table("artists")
+                .select("*")
+                .eq("is_core", False)
+                .order("last_checked", nulls_first=True)
+                .limit(limit)
+                .execute())
+    return response.data
+
+def update_artist_last_checked(artist_id):
+    if not supabase:
+        return
+    try:
+        supabase.table("artists").update({
+            "last_checked": datetime.now().isoformat()
+        }).eq("id", artist_id).execute()
+    except Exception as e:
+        print(f"Error updating last_checked for artist {artist_id}: {e}")
 
 def get_artists_patches():
     if not supabase:
@@ -62,6 +92,9 @@ def is_proximity_event(country, city):
 def fetch_bandsintown_events(artist_name, patch=None):
     if not BANDSINTOWN_APP_ID:
         return []
+
+    # Rate limiting
+    time.sleep(RATE_LIMIT_DELAY)
 
     artist_id = patch if patch else artist_name
     url = f"https://rest.bandsintown.com/artists/{artist_id}/events"
@@ -115,6 +148,8 @@ def linktree_sniffer(artist):
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'
     }
 
+    # Rate limiting
+    time.sleep(RATE_LIMIT_DELAY)
     # Stealth mode: random sleep
     time.sleep(random.uniform(2, 5))
 
@@ -149,6 +184,7 @@ def linktree_sniffer(artist):
         print(f"Error sniffing Linktree for {artist['name']}: {e}")
 
 def get_similar_punk_artists(artist_id, artist_name):
+    global last_fm_lookups_performed
     if not LASTFM_API_KEY:
         return []
 
@@ -163,7 +199,17 @@ def get_similar_punk_artists(artist_id, artist_name):
     except Exception as e:
         print(f"Error checking cache for {artist_name}: {e}")
 
+    if last_fm_lookups_performed >= LAST_FM_LOOKUP_LIMIT:
+        print(f"Last.fm lookup limit reached. Skipping discovery for {artist_name}.")
+        return []
+
+    last_fm_lookups_performed += 1
+
     print(f"Fetching fresh similar artists for {artist_name} from Last.fm")
+
+    # Rate limiting
+    time.sleep(RATE_LIMIT_DELAY)
+
     similar_url = "https://ws.audioscrobbler.com/2.0/"
     params = {
         "method": "artist.getsimilar",
@@ -194,6 +240,8 @@ def get_similar_punk_artists(artist_id, artist_name):
                 "api_key": LASTFM_API_KEY,
                 "format": "json"
             }
+            # Rate limiting
+            time.sleep(RATE_LIMIT_DELAY)
             tags_response = requests.get(similar_url, params=tags_params)
             tags_response.raise_for_status()
             tags_data = tags_response.json()
@@ -254,40 +302,54 @@ def main():
     core_artists = get_core_artists()
     print(f"Found {len(core_artists)} core artists.")
 
+    # Smart Scheduling: Fetch rotation artists
+    remaining_quota = max(0, TOTAL_SCAN_LIMIT - len(core_artists))
+    rotation_artists = get_rotation_artists(remaining_quota)
+    print(f"Rotation: fetched {len(rotation_artists)} artists.")
+
+    # Process all selected artists
+    all_to_process = core_artists + rotation_artists
+    print(f"Total artists to process this run: {len(all_to_process)}")
+
     # Get all available patches
     patches = get_artists_patches()
-
     core_names = {a['name'] for a in core_artists}
 
-    for artist in core_artists:
+    for artist in all_to_process:
         name = artist['name']
         artist_id = artist['id']
+        is_core = artist.get('is_core', False)
         patch = artist.get('bandsintown_patch')
-        print(f"--- Processing core artist: {name} ---")
+        print(f"--- Processing {'core' if is_core else 'rotation'} artist: {name} ---")
 
         # Mission 3: Linktree Sniffer
         linktree_sniffer(artist)
 
         # Mission 2: Omni-Search
-        print(f"Fetching events for core artist: {name}...")
-        core_events = fetch_all_sources(name, patch=patch)
-        new_core = upsert_events(core_events, False)
-        print(f"Upserted {new_core} core events for {name}.")
+        print(f"Fetching events for {name}...")
+        events = fetch_all_sources(name, patch=patch)
+        # Rotation artists are official artists, not recommendations.
+        new_events_count = upsert_events(events, False)
+        print(f"Upserted {new_events_count} events for {name}.")
 
-        # Mission 4: Discovery Logic with Cache
-        print(f"Finding similar punk artists for {name}...")
-        similar_punks = get_similar_punk_artists(artist_id, name)
-        # Filter out core artists from recommendations
-        similar_punks = [sa for sa in similar_punks if sa not in core_names]
-        print(f"Validated similar artists: {', '.join(similar_punks)}")
+        # Mission 4: Discovery Logic (Only for Core Artists)
+        if is_core:
+            print(f"Finding similar punk artists for core artist {name}...")
+            similar_punks = get_similar_punk_artists(artist_id, name)
+            # Filter out core artists from recommendations
+            similar_punks = [sa for sa in similar_punks if sa not in core_names]
+            print(f"Validated similar artists: {', '.join(similar_punks)}")
 
-        for sa in similar_punks:
-            print(f"Checking events for similar artist: {sa}...")
-            sa_patch = patches.get(sa)
-            sa_events = fetch_all_sources(sa, patch=sa_patch)
-            new_rec = upsert_events(sa_events, True)
-            if new_rec > 0:
-                print(f"Found and upserted {new_rec} recommended events for {sa}.")
+            for sa in similar_punks:
+                print(f"Checking events for similar artist: {sa}...")
+                sa_patch = patches.get(sa)
+                sa_events = fetch_all_sources(sa, patch=sa_patch)
+                new_rec = upsert_events(sa_events, True)
+                if new_rec > 0:
+                    print(f"Found and upserted {new_rec} recommended events for {sa}.")
+
+        # Update last_checked
+        update_artist_last_checked(artist_id)
 
     print("\n--- SCOUT SUMMARY ---")
     print(f"Total events upserted: {summary['events_upserted']}")
