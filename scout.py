@@ -15,7 +15,6 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 BANDSINTOWN_APP_ID = os.environ.get("BANDSINTOWN_APP_ID")
-SONGKICK_API_KEY = os.environ.get("SONGKICK_API_KEY")
 
 if not all([SUPABASE_URL, SUPABASE_KEY]):
     print("Warning: Supabase credentials not fully set.")
@@ -23,8 +22,6 @@ if not LASTFM_API_KEY:
     print("Warning: LASTFM_API_KEY not set. Discovery will be skipped.")
 if not BANDSINTOWN_APP_ID:
     print("Warning: BANDSINTOWN_APP_ID not set. Bandsintown fetching will be skipped.")
-if not SONGKICK_API_KEY:
-    print("Warning: SONGKICK_API_KEY not set. Songkick fetching will be skipped.")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
@@ -99,90 +96,11 @@ def fetch_bandsintown_events(artist_name, patch=None):
         print(f"Error fetching Bandsintown events for {artist_name}: {e}")
         return []
 
-def fetch_songkick_events(artist_name):
-    if not SONGKICK_API_KEY:
-        return []
-
-    # First, find the artist ID
-    search_url = "https://api.songkick.com/api/3.0/search/artists.json"
-    params = {"apikey": SONGKICK_API_KEY, "query": artist_name}
-    try:
-        resp = requests.get(search_url, params=params)
-        resp.raise_for_status()
-        results = resp.json().get('resultsPage', {}).get('results', {}).get('artist', [])
-        if not results:
-            return []
-
-        # Take the first match (simplification)
-        sk_artist_id = results[0]['id']
-
-        # Fetch events for this artist
-        events_url = f"https://api.songkick.com/api/3.0/artists/{sk_artist_id}/calendar.json"
-        params = {"apikey": SONGKICK_API_KEY}
-        resp = requests.get(events_url, params=params)
-        resp.raise_for_status()
-        events = resp.json().get('resultsPage', {}).get('results', {}).get('event', [])
-
-        filtered_events = []
-        for event in events:
-            venue = event.get('venue', {})
-            location = event.get('location', {})
-            city_full = location.get('city', '') # e.g. "Madrid, Spain"
-
-            country = None
-            city = city_full
-            if ',' in city_full:
-                city, country = [s.strip() for s in city_full.rsplit(',', 1)]
-
-            # Songkick sometimes puts country in a different place or has different naming
-            # For simplicity, we'll try to guess from city_full
-            is_spain = 'Spain' in city_full
-            is_proximity = False
-
-            if not is_spain:
-                # Check for Portugal, Andorra or French border cities
-                if 'Portugal' in city_full or 'Andorra' in city_full:
-                    is_proximity = True
-                else:
-                    border_cities = ['Biarritz', 'Perpignan', 'Toulouse']
-                    if 'France' in city_full and any(bc in city_full for bc in border_cities):
-                        is_proximity = True
-
-            if is_spain or is_proximity:
-                filtered_events.append({
-                    "artist": artist_name,
-                    "city": city,
-                    "venue": venue.get('displayName'),
-                    "date": event.get('start', {}).get('date'),
-                    "ticket_url": event.get('uri'),
-                    "source": "Songkick",
-                    "is_proximity": is_proximity
-                })
-        return filtered_events
-
-    except Exception as e:
-        print(f"Error fetching Songkick events for {artist_name}: {e}")
-        return []
-
 def fetch_all_sources(artist_name, patch=None):
-    bit_events = fetch_bandsintown_events(artist_name, patch)
-    sk_events = fetch_songkick_events(artist_name)
-
-    # Merge events, prioritizing Bandsintown if both found same event
-    # Unique key: (artist, city, date)
-    merged = {}
-    for e in bit_events + sk_events:
-        key = (e['artist'], e['city'], e['date'])
-        if key not in merged:
-            merged[key] = e
-        else:
-            # If already there, maybe append source?
-            # The spec says "Merge the results to avoid duplicates."
-            # We'll stick to the first one found (BIT then SK)
-            if merged[key]['source'] != e['source']:
-                merged[key]['source'] = f"{merged[key]['source']}, {e['source']}"
-
-    return list(merged.values())
+    """
+    Fetches events for a given artist. Currently only uses Bandsintown.
+    """
+    return fetch_bandsintown_events(artist_name, patch)
 
 def linktree_sniffer(artist):
     url = artist.get('linktree_url')

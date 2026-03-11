@@ -293,8 +293,6 @@ def display_event_card(row, has_leak=False):
     source_icon = "🎸" # Default
     if "Bandsintown" in str(row.get('source', '')):
         source_icon = "🎫"
-    if "Songkick" in str(row.get('source', '')):
-        source_icon = "🎵"
 
     st.markdown(f"""
     <div class="concert-card">

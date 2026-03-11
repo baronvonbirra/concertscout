@@ -37,62 +37,15 @@ class TestScout(unittest.TestCase):
         self.assertEqual(events[1]['city'], "Biarritz")
         self.assertTrue(events[1]['is_proximity'])
 
-    @patch('scout.requests.get')
-    def test_fetch_songkick_events(self, mock_get):
-        # Mock Songkick artist search then calendar
-        def side_effect(url, params=None):
-            mock_res = MagicMock()
-            if "search/artists.json" in url:
-                mock_res.json.return_value = {
-                    "resultsPage": {"results": {"artist": [{"id": 123}]}}
-                }
-            elif "calendar.json" in url:
-                mock_res.json.return_value = {
-                    "resultsPage": {"results": {"event": [
-                        {
-                            "location": {"city": "Barcelona, Spain"},
-                            "venue": {"displayName": "Razzmatazz"},
-                            "start": {"date": "2023-12-05"},
-                            "uri": "http://songkick.com/1"
-                        },
-                        {
-                            "location": {"city": "Lisbon, Portugal"},
-                            "venue": {"displayName": "Musicbox"},
-                            "start": {"date": "2023-12-06"},
-                            "uri": "http://songkick.com/2"
-                        }
-                    ]}}
-                }
-            return mock_res
-
-        mock_get.side_effect = side_effect
-
-        with patch('scout.SONGKICK_API_KEY', 'test_sk'):
-            events = scout.fetch_songkick_events("Lagwagon")
-
-        self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]['city'], "Barcelona")
-        self.assertFalse(events[0]['is_proximity'])
-        self.assertEqual(events[1]['city'], "Lisbon")
-        self.assertTrue(events[1]['is_proximity'])
-
     @patch('scout.fetch_bandsintown_events')
-    @patch('scout.fetch_songkick_events')
-    def test_fetch_all_sources_merge(self, mock_sk, mock_bit):
+    def test_fetch_all_sources(self, mock_bit):
         mock_bit.return_value = [
             {"artist": "NOFX", "city": "Madrid", "date": "2023-12-10", "source": "Bandsintown"}
         ]
-        mock_sk.return_value = [
-            {"artist": "NOFX", "city": "Madrid", "date": "2023-12-10", "source": "Songkick"},
-            {"artist": "NOFX", "city": "Valencia", "date": "2023-12-11", "source": "Songkick"}
-        ]
 
         events = scout.fetch_all_sources("NOFX")
-        self.assertEqual(len(events), 2)
-        # Check merge
-        madrid = [e for e in events if e['city'] == "Madrid"][0]
-        self.assertIn("Bandsintown", madrid['source'])
-        self.assertIn("Songkick", madrid['source'])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['city'], "Madrid")
 
     @patch('scout.requests.get')
     @patch('scout.supabase')

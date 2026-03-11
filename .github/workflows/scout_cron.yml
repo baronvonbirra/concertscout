@@ -28,5 +28,4 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           BANDSINTOWN_APP_ID: ${{ secrets.BANDSINTOWN_APP_ID }}
-          SONGKICK_API_KEY: ${{ secrets.SONGKICK_API_KEY }}
         run: python scout.py
