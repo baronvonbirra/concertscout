@@ -1,5 +1,11 @@
 import unittest
 from unittest.mock import patch, MagicMock
+import sys
+
+# Mock supabase BEFORE importing scout to avoid initialization error
+mock_supabase_lib = MagicMock()
+sys.modules['supabase'] = mock_supabase_lib
+
 import scout
 import json
 
