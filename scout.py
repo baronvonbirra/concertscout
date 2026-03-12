@@ -54,7 +54,7 @@ def get_rotation_artists(limit):
     response = (supabase.table("artists")
                 .select("*")
                 .eq("is_core", False)
-                .order("last_checked", nulls_first=True)
+                .order("last_checked", nullsfirst=True)
                 .limit(limit)
                 .execute())
     return response.data
