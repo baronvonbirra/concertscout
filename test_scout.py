@@ -86,5 +86,19 @@ class TestScout(unittest.TestCase):
         self.assertEqual(similar, ["Pennywise"])
         mock_get.assert_not_called()
 
+    @patch('scout.supabase')
+    def test_get_rotation_artists(self, mock_supabase):
+        mock_query = MagicMock()
+        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[
+            {"name": "Artist1"}
+        ])
+
+        artists = scout.get_rotation_artists(10)
+        self.assertEqual(len(artists), 1)
+
+        # Verify the call to order
+        mock_order = mock_supabase.table.return_value.select.return_value.eq.return_value.order
+        mock_order.assert_called_once_with("last_checked", nullsfirst=True)
+
 if __name__ == '__main__':
     unittest.main()
