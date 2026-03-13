@@ -47,6 +47,12 @@ def get_core_artists():
     response = supabase.table("artists").select("*").eq("is_core", True).execute()
     return response.data
 
+def get_all_artists_names():
+    if not supabase:
+        return set()
+    response = supabase.table("artists").select("name").execute()
+    return {a['name'] for a in response.data}
+
 def get_rotation_artists(limit):
     if not supabase:
         return []
@@ -57,6 +63,12 @@ def get_rotation_artists(limit):
                 .order("last_checked", nullsfirst=True)
                 .limit(limit)
                 .execute())
+    return response.data
+
+def get_locations():
+    if not supabase:
+        return []
+    response = supabase.table("locations").select("*").execute()
     return response.data
 
 def update_artist_last_checked(artist_id):
@@ -134,6 +146,61 @@ def fetch_all_sources(artist_name, patch=None):
     Fetches events for a given artist. Currently only uses Bandsintown.
     """
     return fetch_bandsintown_events(artist_name, patch)
+
+def scrape_songkick_city(city_id, country, city_name):
+    """
+    Scrapes Songkick metro area page for upcoming events.
+    """
+    url = f"https://www.songkick.com/metro-areas/{city_id}-{country.lower()}-{city_name.lower().replace(' ', '-')}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+
+    # Rate limiting
+    time.sleep(RATE_LIMIT_DELAY)
+
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        events = []
+        listings = soup.find_all('li', class_='event-listings-element')
+
+        for li in listings:
+            # Artist: p.artists strong
+            artist_tag = li.find('p', class_='artists')
+            artist_name = "Unknown"
+            if artist_tag:
+                strong = artist_tag.find('strong')
+                if strong:
+                    artist_name = strong.get_text(strip=True)
+
+            # Date: time[datetime]
+            time_tag = li.find('time')
+            date = time_tag.get('datetime').split('T')[0] if time_tag and time_tag.get('datetime') else "Unknown"
+
+            # Venue: a.venue-link
+            venue_tag = li.find('a', class_='venue-link')
+            venue = venue_tag.get_text(strip=True) if venue_tag else "Unknown"
+
+            # Ticket URL: a.event-link
+            link_tag = li.find('a', class_='event-link')
+            event_url = f"https://www.songkick.com{link_tag.get('href')}" if link_tag and link_tag.get('href') else "#"
+
+            events.append({
+                "artist": artist_name,
+                "date": date,
+                "venue": venue,
+                "ticket_url": event_url,
+                "city": city_name,
+                "source": "Songkick"
+            })
+
+        return events
+    except Exception as e:
+        print(f"Error scraping {city_name}: {e}")
+        return []
 
 def linktree_sniffer(artist):
     url = artist.get('linktree_url')
@@ -297,59 +364,91 @@ def upsert_events(events, is_recommendation):
     summary['events_upserted'] += count
     return count
 
+def get_artist_tags(artist_name):
+    """
+    Fetches top tags for an artist from Last.fm.
+    """
+    if not LASTFM_API_KEY:
+        return []
+
+    time.sleep(RATE_LIMIT_DELAY)
+    url = "https://ws.audioscrobbler.com/2.0/"
+    params = {
+        "method": "artist.gettoptags",
+        "artist": artist_name,
+        "api_key": LASTFM_API_KEY,
+        "format": "json"
+    }
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        tags = [t['name'].lower() for t in data.get('toptags', {}).get('tag', [])]
+        return tags
+    except Exception as e:
+        print(f"Error fetching tags for {artist_name}: {e}")
+        return []
+
 def main():
-    print("Starting PUNK-SCOUT V2.0...")
+    print("Starting PUNK-SCOUT City-Scraper Engine...")
+
+    # 1. Update Linktrees for High Priority Artists (Keep this logic)
     core_artists = get_core_artists()
-    print(f"Found {len(core_artists)} core artists.")
-
-    # Smart Scheduling: Fetch rotation artists
-    remaining_quota = max(0, TOTAL_SCAN_LIMIT - len(core_artists))
-    rotation_artists = get_rotation_artists(remaining_quota)
-    print(f"Rotation: fetched {len(rotation_artists)} artists.")
-
-    # Process all selected artists
-    all_to_process = core_artists + rotation_artists
-    print(f"Total artists to process this run: {len(all_to_process)}")
-
-    # Get all available patches
-    patches = get_artists_patches()
-    core_names = {a['name'] for a in core_artists}
-
-    for artist in all_to_process:
-        name = artist['name']
-        artist_id = artist['id']
-        is_core = artist.get('is_core', False)
-        patch = artist.get('bandsintown_patch')
-        print(f"--- Processing {'core' if is_core else 'rotation'} artist: {name} ---")
-
-        # Mission 3: Linktree Sniffer
+    print(f"Checking Linktrees for {len(core_artists)} core artists...")
+    for artist in core_artists:
         linktree_sniffer(artist)
+        update_artist_last_checked(artist['id'])
 
-        # Mission 2: Omni-Search
-        print(f"Fetching events for {name}...")
-        events = fetch_all_sources(name, patch=patch)
-        # Rotation artists are official artists, not recommendations.
-        new_events_count = upsert_events(events, False)
-        print(f"Upserted {new_events_count} events for {name}.")
+    # 2. Songkick City Scraper
+    locations = get_locations()
+    print(f"Scanning {len(locations)} locations...")
 
-        # Mission 4: Discovery Logic (Only for Core Artists)
-        if is_core:
-            print(f"Finding similar punk artists for core artist {name}...")
-            similar_punks = get_similar_punk_artists(artist_id, name)
-            # Filter out core artists from recommendations
-            similar_punks = [sa for sa in similar_punks if sa not in core_names]
-            print(f"Validated similar artists: {', '.join(similar_punks)}")
+    known_artists = get_all_artists_names()
 
-            for sa in similar_punks:
-                print(f"Checking events for similar artist: {sa}...")
-                sa_patch = patches.get(sa)
-                sa_events = fetch_all_sources(sa, patch=sa_patch)
-                new_rec = upsert_events(sa_events, True)
-                if new_rec > 0:
-                    print(f"Found and upserted {new_rec} recommended events for {sa}.")
+    punk_keywords = ['punk', 'hardcore', 'ska', 'oi']
 
-        # Update last_checked
-        update_artist_last_checked(artist_id)
+    for loc in locations:
+        city_id = loc['songkick_id']
+        country = loc['country']
+        city_name = loc['city']
+
+        print(f"\n--- Scraping {city_name}, {country} ---")
+        scraped_events = scrape_songkick_city(city_id, country, city_name)
+        print(f"Found {len(scraped_events)} events.")
+
+        for event in scraped_events:
+            artist_name = event['artist']
+
+            if artist_name in known_artists:
+                print(f"  [MATCH] {artist_name} is in our watchlist.")
+                event['priority'] = 'high'
+                event['discovery_source'] = 'Core List'
+                upsert_events([event], False)
+            else:
+                # Discovery logic
+                print(f"  [NEW] Checking {artist_name} on Last.fm...")
+                tags = get_artist_tags(artist_name)
+                is_punk = any(kw in ' '.join(tags) for kw in punk_keywords)
+
+                if is_punk:
+                    print(f"    [DISCOVERED] {artist_name} is punk! (Tags: {', '.join(tags[:5])})")
+                    # Add to artists table
+                    try:
+                        supabase.table("artists").insert({
+                            "name": artist_name,
+                            "is_core": False,
+                            "is_discovered": True,
+                            "genre_tags": tags
+                        }).execute()
+                        known_artists.add(artist_name)
+
+                        event['priority'] = 'medium'
+                        event['discovery_source'] = 'Songkick Scraper'
+                        upsert_events([event], True)
+                    except Exception as e:
+                        print(f"    Error adding discovered artist {artist_name}: {e}")
+                else:
+                    print(f"    [SKIPPED] {artist_name} tags: {', '.join(tags[:5])}")
 
     print("\n--- SCOUT SUMMARY ---")
     print(f"Total events upserted: {summary['events_upserted']}")

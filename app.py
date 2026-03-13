@@ -288,12 +288,25 @@ def display_event_card(row, has_leak=False):
     badges = ""
     if has_leak:
         badges += '<span class="badge badge-leak">FAST-PASS / LEAK</span>'
+
+    priority = str(row.get('priority', '')).lower()
+    if priority == 'high':
+        badges += '<span class="badge" style="background-color: #E60000; color: #FFFFFF;">RED ALERT</span>'
+    elif priority == 'medium':
+        badges += '<span class="badge" style="background-color: #39FF14; color: #000000;">DISCOVERY</span>'
+
     if row.get('is_proximity'):
         badges += '<span class="badge badge-proximity">BORDER CROSSER 🇵🇹/🇫🇷</span>'
 
     source_icon = "🎸" # Default
     if "Bandsintown" in str(row.get('source', '')):
         source_icon = "🎫"
+    elif "Songkick" in str(row.get('source', '')):
+        source_icon = "🤘"
+
+    discovery_info = ""
+    if row.get('discovery_source'):
+        discovery_info = f'<div class="source-footer" style="margin-top: 0;">🔍 {row["discovery_source"]}</div>'
 
     st.markdown(textwrap.dedent(f"""
 <div class="concert-card">
@@ -303,6 +316,7 @@ def display_event_card(row, has_leak=False):
 <div style="font-size: 1rem; color: #39FF14;">📅 {row['date']}</div>
 <a href="{row.get('ticket_url') or '#'}" target="_blank" class="ticket-btn">GET TICKETS</a>
 <div class="source-footer">{source_icon} SOURCE: {row.get('source') or 'UNKNOWN'}</div>
+{discovery_info}
 </div>
 """).strip(), unsafe_allow_html=True)
 
