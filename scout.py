@@ -149,58 +149,85 @@ def fetch_all_sources(artist_name, patch=None):
 
 def scrape_songkick_city(city_id, country, city_name):
     """
-    Scrapes Songkick metro area page for upcoming events.
+    Scrapes Songkick metro area pages for upcoming events, with pagination support.
+    Covers all events until the end of 2026.
     """
-    url = f"https://www.songkick.com/metro-areas/{city_id}-{country.lower()}-{city_name.lower().replace(' ', '-')}"
+    base_url = f"https://www.songkick.com/metro-areas/{city_id}-{country.lower()}-{city_name.lower().replace(' ', '-')}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
 
-    # Rate limiting
-    time.sleep(RATE_LIMIT_DELAY)
+    all_events = []
+    page = 1
+    max_pages = 20 # Safety limit
 
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+    while page <= max_pages:
+        url = f"{base_url}?page={page}"
+        print(f"  Scraping page {page} of {city_name}...")
 
-        events = []
-        listings = soup.find_all('li', class_='event-listings-element')
+        # Rate limiting
+        time.sleep(RATE_LIMIT_DELAY)
 
-        for li in listings:
-            # Artist: p.artists strong
-            artist_tag = li.find('p', class_='artists')
-            artist_name = "Unknown"
-            if artist_tag:
-                strong = artist_tag.find('strong')
-                if strong:
-                    artist_name = strong.get_text(strip=True)
+        try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
 
-            # Date: time[datetime]
-            time_tag = li.find('time')
-            date = time_tag.get('datetime').split('T')[0] if time_tag and time_tag.get('datetime') else "Unknown"
+            listings = soup.find_all('li', class_='event-listings-element')
+            if not listings:
+                print(f"    No more events found on page {page}.")
+                break
 
-            # Venue: a.venue-link
-            venue_tag = li.find('a', class_='venue-link')
-            venue = venue_tag.get_text(strip=True) if venue_tag else "Unknown"
+            page_events_count = 0
+            for li in listings:
+                # Artist: p.artists strong
+                artist_tag = li.find('p', class_='artists')
+                artist_name = "Unknown"
+                if artist_tag:
+                    strong = artist_tag.find('strong')
+                    if strong:
+                        artist_name = strong.get_text(strip=True)
 
-            # Ticket URL: a.event-link
-            link_tag = li.find('a', class_='event-link')
-            event_url = f"https://www.songkick.com{link_tag.get('href')}" if link_tag and link_tag.get('href') else "#"
+                # Date: time[datetime]
+                time_tag = li.find('time')
+                date_str = time_tag.get('datetime').split('T')[0] if time_tag and time_tag.get('datetime') else "Unknown"
 
-            events.append({
-                "artist": artist_name,
-                "date": date,
-                "venue": venue,
-                "ticket_url": event_url,
-                "city": city_name,
-                "source": "Songkick"
-            })
+                # Stop if we hit 2027
+                if date_str != "Unknown" and date_str >= "2027-01-01":
+                    print(f"    Reached date {date_str}, stopping pagination.")
+                    return all_events
 
-        return events
-    except Exception as e:
-        print(f"Error scraping {city_name}: {e}")
-        return []
+                # Venue: a.venue-link
+                venue_tag = li.find('a', class_='venue-link')
+                venue = venue_tag.get_text(strip=True) if venue_tag else "Unknown"
+
+                # Ticket URL: a.event-link
+                link_tag = li.find('a', class_='event-link')
+                event_url = f"https://www.songkick.com{link_tag.get('href')}" if link_tag and link_tag.get('href') else "#"
+
+                all_events.append({
+                    "artist": artist_name,
+                    "date": date_str,
+                    "venue": venue,
+                    "ticket_url": event_url,
+                    "city": city_name,
+                    "source": "Songkick",
+                    "is_proximity": is_proximity_event(country, city_name)
+                })
+                page_events_count += 1
+
+            print(f"    Found {page_events_count} events on page {page}.")
+
+            # If we found less than a full page (usually 50 events on Songkick), we might be at the end
+            # But safer to check for next page link if we want to be absolutely sure.
+            # However, the loop will naturally break if next page has no listings.
+            page += 1
+
+        except Exception as e:
+            print(f"    Error scraping {city_name} page {page}: {e}")
+            break
+
+    return all_events
 
 def linktree_sniffer(artist):
     url = artist.get('linktree_url')

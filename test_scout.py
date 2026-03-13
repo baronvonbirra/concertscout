@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import scout
 import json
+from bs4 import BeautifulSoup
 
 class TestScout(unittest.TestCase):
 
@@ -79,6 +80,66 @@ class TestScout(unittest.TestCase):
         similar = scout.get_similar_punk_artists(1, "Bad Religion")
         self.assertEqual(similar, ["Pennywise"])
         mock_get.assert_not_called()
+
+    @patch('scout.requests.get')
+    @patch('scout.time.sleep')
+    def test_scrape_songkick_city_pagination(self, mock_sleep, mock_get):
+        # Mocking 2 pages of results
+        # Page 1 has 2 events in 2026
+        # Page 2 has 1 event in 2026 and 1 in 2027
+
+        html_page1 = """
+        <html>
+            <li class="event-listings-element">
+                <p class="artists"><strong>Artist 1</strong></p>
+                <time datetime="2026-05-01T20:00:00"></time>
+                <a class="venue-link">Venue 1</a>
+                <a class="event-link" href="/concerts/1"></a>
+            </li>
+            <li class="event-listings-element">
+                <p class="artists"><strong>Artist 2</strong></p>
+                <time datetime="2026-06-01T20:00:00"></time>
+                <a class="venue-link">Venue 2</a>
+                <a class="event-link" href="/concerts/2"></a>
+            </li>
+        </html>
+        """
+
+        html_page2 = """
+        <html>
+            <li class="event-listings-element">
+                <p class="artists"><strong>Artist 3</strong></p>
+                <time datetime="2026-12-31T20:00:00"></time>
+                <a class="venue-link">Venue 3</a>
+                <a class="event-link" href="/concerts/3"></a>
+            </li>
+            <li class="event-listings-element">
+                <p class="artists"><strong>Artist 4</strong></p>
+                <time datetime="2027-01-01T20:00:00"></time>
+                <a class="venue-link">Venue 4</a>
+                <a class="event-link" href="/concerts/4"></a>
+            </li>
+        </html>
+        """
+
+        mock_resp1 = MagicMock()
+        mock_resp1.text = html_page1
+        mock_resp1.status_code = 200
+
+        mock_resp2 = MagicMock()
+        mock_resp2.text = html_page2
+        mock_resp2.status_code = 200
+
+        mock_get.side_effect = [mock_resp1, mock_resp2]
+
+        events = scout.scrape_songkick_city("123", "Spain", "Madrid")
+
+        # Should have 3 events (2 from page 1, 1 from page 2 before hitting 2027)
+        self.assertEqual(len(events), 3)
+        self.assertEqual(events[0]['artist'], "Artist 1")
+        self.assertEqual(events[1]['artist'], "Artist 2")
+        self.assertEqual(events[2]['artist'], "Artist 3")
+        self.assertEqual(mock_get.call_count, 2)
 
 if __name__ == '__main__':
     unittest.main()
