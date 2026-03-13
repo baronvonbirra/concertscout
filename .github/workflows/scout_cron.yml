@@ -1,8 +1,8 @@
-name: Last-Scout 2-Day Run
+name: Last-Scout Daily Run
 
 on:
   schedule:
-    - cron: '0 0 */2 * *'  # Every 2 days at 00:00 UTC
+    - cron: '0 0 * * *'  # Every day at 00:00 UTC
   workflow_dispatch:      # Allow manual trigger
 
 jobs:

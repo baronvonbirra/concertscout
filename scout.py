@@ -401,13 +401,31 @@ def main():
 
     # 2. Songkick City Scraper
     locations = get_locations()
-    print(f"Scanning {len(locations)} locations...")
+
+    # Priority Scan logic:
+    # Priority 3: Every run
+    # Priority 2: Every run (assuming they are intermediate)
+    # Priority 1: Only on weekends (Saturday=5, Sunday=6)
+    today_weekday = datetime.now().weekday()
+    is_weekend = today_weekday >= 5
+
+    filtered_locations = []
+    for loc in locations:
+        p = loc.get('scan_priority', 3)
+        if p >= 2:
+            filtered_locations.append(loc)
+        elif p == 1 and is_weekend:
+            filtered_locations.append(loc)
+        else:
+            print(f"Skipping {loc['city']} (Priority {p}, Weekday {today_weekday})")
+
+    print(f"Scanning {len(filtered_locations)} locations...")
 
     known_artists = get_all_artists_names()
 
-    punk_keywords = ['punk', 'hardcore', 'ska', 'oi']
+    punk_keywords = ['punk', 'hardcore', 'oi']
 
-    for loc in locations:
+    for loc in filtered_locations:
         city_id = loc['songkick_id']
         country = loc['country']
         city_name = loc['city']
