@@ -25,6 +25,15 @@ if not BANDSINTOWN_APP_ID:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
+# User-Agent list for scraper rotation
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+]
+
 # Limits and Rate Limiting
 LAST_FM_LOOKUP_LIMIT = 20
 TOTAL_SCAN_LIMIT = 200
@@ -153,9 +162,6 @@ def scrape_songkick_city(city_id, country, city_name):
     Covers all events until the end of 2026.
     """
     base_url = f"https://www.songkick.com/metro-areas/{city_id}-{country.lower()}-{city_name.lower().replace(' ', '-')}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
 
     all_events = []
     page = 1
@@ -165,6 +171,9 @@ def scrape_songkick_city(city_id, country, city_name):
         url = f"{base_url}?page={page}"
         print(f"  Scraping page {page} of {city_name}...")
 
+        # User-Agent Rotation (Requirement: browser-like string to avoid 403 Forbidden)
+        headers = {"User-Agent": random.choice(USER_AGENTS)}
+
         # Rate limiting
         time.sleep(RATE_LIMIT_DELAY)
 
@@ -173,20 +182,16 @@ def scrape_songkick_city(city_id, country, city_name):
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            listings = soup.find_all('li', class_='event-listings-element')
+            listings = soup.find_all('li', class_='event-listing')
             if not listings:
                 print(f"    No more events found on page {page}.")
                 break
 
             page_events_count = 0
             for li in listings:
-                # Artist: p.artists strong
-                artist_tag = li.find('p', class_='artists')
-                artist_name = "Unknown"
-                if artist_tag:
-                    strong = artist_tag.find('strong')
-                    if strong:
-                        artist_name = strong.get_text(strip=True)
+                # Artist: <strong>
+                artist_tag = li.find('strong')
+                artist_name = artist_tag.get_text(strip=True) if artist_tag else "Unknown"
 
                 # Date: time[datetime]
                 time_tag = li.find('time')
@@ -197,8 +202,8 @@ def scrape_songkick_city(city_id, country, city_name):
                     print(f"    Reached date {date_str}, stopping pagination.")
                     return all_events
 
-                # Venue: a.venue-link
-                venue_tag = li.find('a', class_='venue-link')
+                # Venue: .location span
+                venue_tag = li.find('span', class_='location')
                 venue = venue_tag.get_text(strip=True) if venue_tag else "Unknown"
 
                 # Ticket URL: a.event-link
@@ -341,7 +346,8 @@ def get_similar_punk_artists(artist_id, artist_name):
             tags_data = tags_response.json()
             tags = [t['name'].lower() for t in tags_data.get('toptags', {}).get('tag', [])]
 
-            punk_keywords = ['punk', 'hardcore', 'crust', 'post-punk']
+            # Requirement: Last.fm Tag Checker (Filter: punk, hardcore, ska, or oi)
+            punk_keywords = ['punk', 'hardcore', 'ska', 'oi', 'crust', 'post-punk']
             is_punk = any(keyword in ' '.join(tags) for keyword in punk_keywords)
 
             if is_punk:
@@ -450,7 +456,7 @@ def main():
 
     known_artists = get_all_artists_names()
 
-    punk_keywords = ['punk', 'hardcore', 'oi']
+    punk_keywords = ['punk', 'hardcore', 'ska', 'oi']
 
     for loc in filtered_locations:
         city_id = loc['songkick_id']
@@ -464,20 +470,23 @@ def main():
         for event in scraped_events:
             artist_name = event['artist']
 
+            # Requirement: The 'Golden Match' logic
             if artist_name in known_artists:
                 print(f"  [MATCH] {artist_name} is in our watchlist.")
+                # If it exists -> Mark as 'High Priority Event'
                 event['priority'] = 'high'
                 event['discovery_source'] = 'Core List'
                 upsert_events([event], False)
             else:
-                # Discovery logic
+                # Discovery logic for new artists
                 print(f"  [NEW] Checking {artist_name} on Last.fm...")
                 tags = get_artist_tags(artist_name)
+                # Requirement: The Last.fm Filter (If the tags include punk, hardcore, ska, or oi)
                 is_punk = any(kw in ' '.join(tags) for kw in punk_keywords)
 
                 if is_punk:
                     print(f"    [DISCOVERED] {artist_name} is punk! (Tags: {', '.join(tags[:5])})")
-                    # Add to artists table
+                    # Requirement: Save the concert and add the artist to the database with is_core = false
                     try:
                         supabase.table("artists").insert({
                             "name": artist_name,

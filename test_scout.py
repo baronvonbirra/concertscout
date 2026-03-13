@@ -90,16 +90,16 @@ class TestScout(unittest.TestCase):
 
         html_page1 = """
         <html>
-            <li class="event-listings-element">
-                <p class="artists"><strong>Artist 1</strong></p>
+            <li class="event-listing">
+                <strong>Artist 1</strong>
                 <time datetime="2026-05-01T20:00:00"></time>
-                <a class="venue-link">Venue 1</a>
+                <span class="location">Venue 1</span>
                 <a class="event-link" href="/concerts/1"></a>
             </li>
-            <li class="event-listings-element">
-                <p class="artists"><strong>Artist 2</strong></p>
+            <li class="event-listing">
+                <strong>Artist 2</strong>
                 <time datetime="2026-06-01T20:00:00"></time>
-                <a class="venue-link">Venue 2</a>
+                <span class="location">Venue 2</span>
                 <a class="event-link" href="/concerts/2"></a>
             </li>
         </html>
@@ -107,16 +107,16 @@ class TestScout(unittest.TestCase):
 
         html_page2 = """
         <html>
-            <li class="event-listings-element">
-                <p class="artists"><strong>Artist 3</strong></p>
+            <li class="event-listing">
+                <strong>Artist 3</strong>
                 <time datetime="2026-12-31T20:00:00"></time>
-                <a class="venue-link">Venue 3</a>
+                <span class="location">Venue 3</span>
                 <a class="event-link" href="/concerts/3"></a>
             </li>
-            <li class="event-listings-element">
-                <p class="artists"><strong>Artist 4</strong></p>
+            <li class="event-listing">
+                <strong>Artist 4</strong>
                 <time datetime="2027-01-01T20:00:00"></time>
-                <a class="venue-link">Venue 4</a>
+                <span class="location">Venue 4</span>
                 <a class="event-link" href="/concerts/4"></a>
             </li>
         </html>
