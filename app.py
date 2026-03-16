@@ -133,128 +133,13 @@ import streamlit as st
 import pandas as pd
 import textwrap
 import os
+import json
 from supabase import create_client, Client, ClientOptions
 from dotenv import load_dotenv
 
 load_dotenv()
 
-st.set_page_config(page_title="PUNK-SCOUT V2.0", layout="wide")
-
-# CUSTOM CSS FOR PUNK ZINE AESTHETIC V2
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Special+Elite&display=swap');
-
-    /* Global Background and Text */
-    .stApp {
-        background-color: #000000;
-        color: #FFFFFF;
-        font-family: 'Courier New', Courier, monospace;
-    }
-
-    /* Headers with Duct Tape effect */
-    h1, h2, h3 {
-        color: #E60000 !important; /* Anarchy Red */
-        font-family: 'Special Elite', cursive !important;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-        background-color: #000000;
-        display: inline-block;
-        padding: 5px 20px;
-        border: 4px solid #FFFFFF;
-        box-shadow: 5px 5px 0px #E60000;
-        margin-bottom: 20px;
-    }
-
-    /* Cards */
-    .concert-card {
-        border: 3px solid #FFFFFF;
-        padding: 20px;
-        margin-bottom: 20px;
-        background-color: #000000;
-        position: relative;
-        overflow: hidden;
-    }
-
-    .concert-card::before {
-        content: "";
-        position: absolute;
-        top: 0; left: 0; right: 0; bottom: 0;
-        opacity: 0.2;
-        pointer-events: none;
-    }
-
-    /* Duct Tape Effect for Artist Name */
-    .artist-name {
-        background-color: #FFFFFF;
-        color: #000000;
-        padding: 5px 15px;
-        display: inline-block;
-        font-weight: bold;
-        transform: rotate(-1.5deg);
-        font-size: 1.5rem;
-        margin-bottom: 15px;
-        box-shadow: 3px 3px 0px #39FF14;
-    }
-
-    /* Badges */
-    .badge {
-        padding: 2px 8px;
-        font-weight: bold;
-        text-transform: uppercase;
-        font-size: 0.8rem;
-        display: inline-block;
-        margin-right: 5px;
-        margin-bottom: 5px;
-    }
-
-    .badge-leak {
-        background-color: #E60000;
-        color: #FFFFFF;
-        animation: blinker 1s linear infinite;
-    }
-
-    @keyframes blinker {
-        50% { opacity: 0; }
-    }
-
-    .badge-proximity {
-        background-color: #FFFF00;
-        color: #000000;
-    }
-
-    /* Tickets Button */
-    .ticket-btn {
-        background-color: #39FF14; /* Radioactive Green */
-        color: #000000;
-        padding: 10px 20px;
-        text-decoration: none;
-        font-weight: bold;
-        border: 2px solid #000000;
-        display: inline-block;
-        margin-top: 10px;
-        box-shadow: 4px 4px 0px #FFFFFF;
-    }
-
-    .ticket-btn:hover {
-        background-color: #FFFFFF;
-        color: #000000;
-        box-shadow: 4px 4px 0px #39FF14;
-    }
-
-    .source-footer {
-        font-size: 0.7rem;
-        color: #888888;
-        margin-top: 15px;
-        font-style: italic;
-    }
-
-    /* Layout Spacing */
-    .stMarkdown {
-        margin-bottom: 1rem;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="PUNK-SCOUT NEO", layout="wide")
 
 # Supabase Setup
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -268,134 +153,216 @@ def get_supabase_client():
 
 supabase = get_supabase_client()
 
-def fetch_events():
+PUNK_KEYWORDS = {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
+
+def calculate_punk_score(tags):
+    if not tags: return 0
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except:
+            tags = [tags]
+
+    if not isinstance(tags, list): return 0
+
+    punk_count = sum(1 for t in tags if any(pk in str(t).lower() for pk in PUNK_KEYWORDS))
+    # Score based on top 5 tags primarily
+    score = int((punk_count / min(len(tags), 5)) * 100)
+    return min(score, 100)
+
+def fetch_consolidated_data():
     if not supabase:
-        return pd.DataFrame()
+        return []
 
-    # 1. Fetch artists that are NOT blocked
-    blocked_res = supabase.table("artists").select("name").eq("status", "blocked").execute()
-    blocked_names = [a['name'] for a in blocked_res.data]
+    try:
+        # Fetch artists
+        artists_res = supabase.table("artists").select("name, is_core, genre_tags, status, priority_level").neq("status", "blocked").execute()
+        artists_df = pd.DataFrame(artists_res.data)
 
-    # 2. Fetch events
-    response = supabase.table("events").select("*").execute()
-    df = pd.DataFrame(response.data)
+        # Fetch events
+        events_res = supabase.table("events").select("*").execute()
+        events_df = pd.DataFrame(events_res.data)
 
-    if not df.empty and blocked_names:
-        df = df[~df['artist'].isin(blocked_names)]
+        if events_df.empty:
+            return []
 
-    return df
+        if artists_df.empty:
+            # Should not happen if there are events, but safety first
+            events_df['is_core'] = False
+            events_df['punk_score'] = 0
+            events_df['genre_tags'] = "[]"
+            return events_df.to_dict('records')
 
-def fetch_artists():
-    if not supabase:
-        return pd.DataFrame()
-    response = supabase.table("artists").select("name, last_linktree_snapshot, priority_level, status, needs_manual_verification").neq("status", "blocked").execute()
-    return pd.DataFrame(response.data)
+        # Merge
+        df = pd.merge(events_df, artists_df, left_on='artist', right_on='name', how='inner', suffixes=('', '_art'))
 
-def display_event_card(row, has_leak=False, is_pending=False):
-    badges = ""
-    if has_leak and not is_pending:
-        badges += '<span class="badge badge-leak">FAST-PASS / LEAK</span>'
+        # Calculate punk score
+        df['punk_score'] = df['genre_tags'].apply(calculate_punk_score)
 
-    priority = str(row.get('priority', '')).lower()
-    if is_pending:
-        badges += '<span class="badge" style="background-color: #888888; color: #FFFFFF;">PENDING VERIFICATION</span>'
-    elif priority == 'high':
-        badges += '<span class="badge" style="background-color: #E60000; color: #FFFFFF;">RED ALERT</span>'
-    elif priority == 'medium':
-        badges += '<span class="badge" style="background-color: #39FF14; color: #000000;">DISCOVERY</span>'
+        # Format genre tags for JS
+        df['genre_tags'] = df['genre_tags'].apply(lambda x: x if isinstance(x, list) else [])
 
-    if row.get('is_proximity'):
-        badges += '<span class="badge badge-proximity">BORDER CROSSER 🇵🇹/🇫🇷</span>'
-
-    source_icon = "🎸" # Default
-    if "Bandsintown" in str(row.get('source', '')):
-        source_icon = "🎫"
-    elif "Songkick" in str(row.get('source', '')):
-        source_icon = "🤘"
-
-    discovery_info = ""
-    if row.get('discovery_source'):
-        discovery_info = f'<div class="source-footer" style="margin-top: 0;">🔍 {row["discovery_source"]}</div>'
-
-    st.markdown(textwrap.dedent(f"""
-<div class="concert-card">
-{badges}
-<div class="artist-name">{row['artist']}</div>
-<div style="font-size: 1.2rem; font-weight: bold; margin-bottom: 5px;">📍 {row['city']} - {row['venue']}</div>
-<div style="font-size: 1rem; color: #39FF14;">📅 {row['date']}</div>
-<a href="{row.get('ticket_url') or '#'}" target="_blank" class="ticket-btn">GET TICKETS</a>
-<div class="source-footer">{source_icon} SOURCE: {row.get('source') or 'UNKNOWN'}</div>
-{discovery_info}
-</div>
-""").strip(), unsafe_allow_html=True)
+        return df.to_dict('records')
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        return []
 
 def main():
-    st.title("PUNK-SCOUT V2.0")
+    data = fetch_consolidated_data()
+    events_json = json.dumps(data)
 
-    if 'display_limit' not in st.session_state:
-        st.session_state.display_limit = 20
+    # NEO-BRUTALIST FRONTEND TEMPLATE
+    neo_brutalist_html = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+        <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+        <style>
+            body {{
+                background-color: #121212;
+                color: #FFFFFF;
+                font-family: 'Inter', sans-serif;
+            }}
+            .brutal-card {{
+                background-color: #FFFFFF;
+                color: #000000;
+                border: 4px solid #000000;
+                box-shadow: 8px 8px 0px 0px rgba(0,0,0,1);
+                transition: all 0.2s ease;
+            }}
+            .brutal-card:hover {{
+                transform: translate(-2px, -2px);
+                box-shadow: 10px 10px 0px 0px rgba(0,0,0,1);
+            }}
+            .bebas {{ font-family: 'Bebas Neue', cursive; }}
+            .mono {{ font-family: 'JetBrains Mono', monospace; }}
+            .safety-orange {{ border-color: #FF5733 !important; }}
+            .acid-lime {{ color: #CCFF00; }}
+            .bg-acid-lime {{ background-color: #CCFF00; }}
+            .pill {{
+                border: 2px solid #FFFFFF;
+                padding: 4px 12px;
+                cursor: pointer;
+                transition: all 0.2s;
+            }}
+            .pill.active {{
+                background-color: #CCFF00;
+                color: #000000;
+                border-color: #CCFF00;
+            }}
+        </style>
+        <script>
+            window.concertData = {events_json};
+        </script>
+    </head>
+    <body>
+        <div x-data="{{
+            search: '',
+            city: 'All',
+            discovery: false,
+            events: window.concertData,
+            get filteredEvents() {{
+                return this.events.filter(e => {{
+                    const matchSearch = e.artist.toLowerCase().includes(this.search.toLowerCase()) ||
+                                        e.venue.toLowerCase().includes(this.search.toLowerCase());
+                    const matchCity = this.city === 'All' || e.city === this.city;
+                    const matchDiscovery = this.discovery ? e.is_recommendation : !e.is_recommendation;
+                    return matchSearch && matchCity && matchDiscovery;
+                }});
+            }},
+            get cities() {{
+                return ['All', ...new Set(this.events.map(e => e.city))].sort();
+            }}
+        }}" class="p-4 md:p-8">
 
-    events_df = fetch_events()
-    artists_df = fetch_artists()
+            <!-- Header & Search -->
+            <div class="mb-12">
+                <h1 class="bebas text-6xl md:text-8xl mb-6 tracking-tighter">PUNK-SCOUT <span class="acid-lime">NEO</span></h1>
 
-    if not events_df.empty:
-        selected_cities = st.sidebar.multiselect("FILTER BY CITY", options=sorted(events_df['city'].unique()))
-        if selected_cities:
-            events_df = events_df[events_df['city'].isin(selected_cities)]
+                <div class="flex flex-col md:flex-row gap-4 mb-8">
+                    <input type="text" x-model="search" placeholder="SEARCH AS YOU TYPE..."
+                           class="w-full md:w-1/2 bg-white text-black border-4 border-black p-4 text-2xl mono focus:outline-none shadow-[4px_4px_0px_0px_rgba(204,255,0,1)]">
 
-    # Simple logic to identify "leaks": artists with high priority and linktree snapshots
-    leaky_artists = set()
-    pending_artists = set()
-    if not artists_df.empty:
-        leaky_artists = set(artists_df[
-            (artists_df['priority_level'].str.lower().isin(['high', '10', 'top']))
-        ]['name'])
+                    <div class="flex border-4 border-white overflow-hidden">
+                        <button @click="discovery = false" :class="!discovery ? 'bg-white text-black' : 'text-white'"
+                                class="px-6 py-2 bebas text-2xl transition-all">MY BANDS</button>
+                        <button @click="discovery = true" :class="discovery ? 'bg-acid-lime text-black' : 'text-white'"
+                                class="px-6 py-2 bebas text-2xl transition-all border-l-4 border-white">NEW DISCOVERIES</button>
+                    </div>
+                </div>
 
-        pending_artists = set(artists_df[
-            (artists_df['status'] == 'pending') | (artists_df['needs_manual_verification'] == True)
-        ]['name'])
+                <!-- City Pills -->
+                <div class="flex flex-wrap gap-2">
+                    <template x-for="c in cities" :key="c">
+                        <div @click="city = c" :class="city === c ? 'active' : ''"
+                             class="pill mono text-sm uppercase" x-text="c"></div>
+                    </template>
+                </div>
+            </div>
 
-    if events_df.empty:
-        st.write("NO TOURS FOUND YET. KEEP REBELLIOUS.")
-    else:
-        # Split into Core and Recommendations
-        core_events = events_df[events_df['is_recommendation'] == False]
-        rec_events = events_df[events_df['is_recommendation'] == True]
+            <!-- Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                <template x-for="event in filteredEvents" :key="event.id">
+                    <div class="brutal-card p-6 flex flex-col justify-between" :class="event.is_core ? 'safety-orange' : (event.is_recommendation ? 'border-dashed' : '')">
+                        <div>
+                            <div class="flex justify-between items-start mb-4">
+                                <span x-show="event.is_recommendation" class="bg-black text-white px-2 py-1 text-xs mono" x-text="'SCORE: ' + event.punk_score + '%'"></span>
+                                <span x-show="event.is_core" class="bg-[#FF5733] text-white px-2 py-1 text-xs mono">CORE</span>
 
-        col1, col2 = st.columns(2)
+                                <!-- Andalusia Map Mini-Thumb -->
+                                <div class="w-12 h-12 relative">
+                                    <template x-if="['Málaga', 'Jerez'].includes(event.city)">
+                                        <svg viewBox="0 0 100 60" class="w-full h-full opacity-30">
+                                            <path d="M5,45 L20,55 L80,55 L95,45 L95,15 L70,5 L20,5 L5,15 Z" fill="none" stroke="black" stroke-width="2" />
+                                            <circle :cx="event.city === 'Málaga' ? 60 : 25" :cy="event.city === 'Málaga' ? 45 : 45" r="5" fill="#E60000" />
+                                        </svg>
+                                    </template>
+                                    <template x-if="!['Málaga', 'Jerez'].includes(event.city)">
+                                        <svg viewBox="0 0 24 24" class="w-full h-full opacity-20" fill="none" stroke="black" stroke-width="2">
+                                            <circle cx="12" cy="12" r="10" />
+                                            <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                                        </svg>
+                                    </template>
+                                </div>
+                            </div>
 
-        with col1:
-            st.header("THE PIT (CORE)")
-            if not core_events.empty:
-                display_df = core_events.head(st.session_state.display_limit)
-                for _, row in display_df.iterrows():
-                    is_pending = row['artist'] in pending_artists
-                    display_event_card(
-                        row,
-                        has_leak=row['artist'] in leaky_artists,
-                        is_pending=is_pending
-                    )
-            else:
-                st.write("EMPTY PIT.")
+                            <h2 class="bebas text-4xl mb-2 leading-none" x-text="event.artist"></h2>
+                            <div class="mono text-sm mb-4 uppercase">
+                                <span class="font-bold" x-text="event.city"></span> @ <span x-text="event.venue"></span>
+                            </div>
 
-        with col2:
-            st.header("THE DISTRO (DISTRO/RECS)")
-            if not rec_events.empty:
-                display_df = rec_events.head(st.session_state.display_limit)
-                for _, row in display_df.iterrows():
-                    is_pending = row['artist'] in pending_artists
-                    display_event_card(
-                        row,
-                        has_leak=row['artist'] in leaky_artists,
-                        is_pending=is_pending
-                    )
-            else:
-                st.write("NO RECOMMENDATIONS.")
+                            <div class="bg-black text-white inline-block px-3 py-1 mono text-lg mb-4" x-text="event.date"></div>
 
-        if len(core_events) > st.session_state.display_limit or len(rec_events) > st.session_state.display_limit:
-            if st.button("LOAD MORE"):
-                st.session_state.display_limit += 20
-                st.rerun()
+                            <template x-if="event.is_recommendation && event.genre_tags && event.genre_tags.length > 0">
+                                <div class="flex flex-wrap gap-1 mt-2">
+                                    <template x-for="tag in event.genre_tags.slice(0,3)" :key="tag">
+                                        <span class="text-[10px] mono border border-black px-1" x-text="tag"></span>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
+
+                        <div class="mt-6 flex justify-between items-center">
+                            <a :href="event.ticket_url || '#'" target="_blank"
+                               class="bg-black text-white px-6 py-2 bebas text-xl hover:bg-acid-lime hover:text-black transition-colors">GET TICKETS</a>
+                            <span class="mono text-[10px] opacity-50" x-text="'ID: ' + event.id"></span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Empty State -->
+            <div x-show="filteredEvents.length === 0" class="text-center py-20">
+                <p class="bebas text-4xl opacity-50">NO TOURS FOUND. KEEP REBELLIOUS.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    st.components.v1.html(neo_brutalist_html, height=1200, scrolling=True)
 
 if __name__ == "__main__":
     main()
