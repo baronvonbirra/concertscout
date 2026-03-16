@@ -41,6 +41,9 @@ summary = {
     "events_upserted": 0
 }
 
+PUNK_KEYWORDS = {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
+BLACK_LIST_KEYWORDS = {'pop', 'latin', 'reggaeton', 'ballad', 'romantico'}
+
 def get_core_artists():
     if not supabase:
         return []
@@ -445,6 +448,71 @@ def get_artist_tags(artist_name):
         print(f"Error fetching tags for {artist_name}: {e}")
         return []
 
+def passes_tag_filter(artist_name):
+    """
+    Genre Guardian: Tag Scoring Rule.
+    Fetch top 10 tags. If artist has more Blacklist tags than Punk tags in their top 5, discard.
+    """
+    tags = get_artist_tags(artist_name)
+    if not tags:
+        return False, []
+
+    top_5 = tags[:5]
+    punk_count = sum(1 for t in top_5 if any(pk in t for pk in PUNK_KEYWORDS))
+    blacklist_count = sum(1 for t in top_5 if any(bk in t for bk in BLACK_LIST_KEYWORDS))
+
+    if blacklist_count > punk_count:
+        print(f"    [GENRE GUARDIAN] {artist_name} failed tag filter (Blacklist: {blacklist_count}, Punk: {punk_count})")
+        return False, tags
+
+    return True, tags
+
+def check_similarity_anchor(artist_name):
+    """
+    Genre Guardian: Similarity Cross-Check.
+    Fetch top 5 similar artists from Last.fm.
+    Cross-reference against artists table where is_core = true or source = 'spotify'.
+    Returns True if there is at least one match, False otherwise.
+    """
+    if not LASTFM_API_KEY or not supabase:
+        return False
+
+    time.sleep(RATE_LIMIT_DELAY)
+    url = "https://ws.audioscrobbler.com/2.0/"
+    params = {
+        "method": "artist.getsimilar",
+        "artist": artist_name,
+        "api_key": LASTFM_API_KEY,
+        "format": "json",
+        "limit": 5
+    }
+
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        similar_artists = [a['name'] for a in data.get('similarartists', {}).get('artist', [])]
+
+        if not similar_artists:
+            return False
+
+        # Cross-reference with DB
+        res = (supabase.table("artists")
+               .select("name")
+               .in_("name", similar_artists)
+               .or_("is_core.eq.true,source.eq.spotify")
+               .execute())
+
+        if res.data:
+            print(f"    [GENRE GUARDIAN] {artist_name} passed similarity anchor (Matches: {[r['name'] for r in res.data]})")
+            return True
+
+        print(f"    [GENRE GUARDIAN] {artist_name} failed similarity anchor (Zero overlap with core/spotify artists)")
+        return False
+    except Exception as e:
+        print(f"Error in similarity anchor for {artist_name}: {e}")
+        return False
+
 def main():
     print("Starting PUNK-SCOUT City-Scraper Engine...")
 
@@ -461,10 +529,6 @@ def main():
     # 2. Songkick City Scraper
     locations = get_locations()
 
-    # Priority Scan logic:
-    # Priority 3: Every run
-    # Priority 2: Every run (assuming they are intermediate)
-    # Priority 1: Only on weekends (Saturday=5, Sunday=6)
     today_weekday = datetime.now().weekday()
     is_weekend = today_weekday >= 5
 
@@ -481,8 +545,6 @@ def main():
     print(f"Scanning {len(filtered_locations)} locations...")
 
     known_artists = get_all_artists_names()
-
-    punk_keywords = ['punk', 'hardcore', 'oi']
 
     for loc in filtered_locations:
         city_id = loc['songkick_id']
@@ -504,28 +566,52 @@ def main():
             else:
                 # Discovery logic
                 print(f"  [NEW] Checking {artist_name} on Last.fm...")
-                tags = get_artist_tags(artist_name)
-                is_punk = any(kw in ' '.join(tags) for kw in punk_keywords)
+                passed_tags, tags = passes_tag_filter(artist_name)
 
-                if is_punk:
-                    print(f"    [DISCOVERED] {artist_name} is punk! (Tags: {', '.join(tags[:5])})")
-                    # Add to artists table
+                if not passed_tags:
+                    # Laura Pausini goes straight to blocked.
                     try:
                         supabase.table("artists").insert({
                             "name": artist_name,
                             "is_core": False,
                             "is_discovered": True,
-                            "genre_tags": tags
+                            "genre_tags": tags,
+                            "status": 'blocked'
                         }).execute()
                         known_artists.add(artist_name)
-
-                        event['priority'] = 'medium'
-                        event['discovery_source'] = 'Songkick Scraper'
-                        upsert_events([event], True)
                     except Exception as e:
-                        print(f"    Error adding discovered artist {artist_name}: {e}")
-                else:
-                    print(f"    [SKIPPED] {artist_name} tags: {', '.join(tags[:5])}")
+                        print(f"    Error blocking artist {artist_name}: {e}")
+                    continue
+
+                # Passes tags, check similarity
+                passed_similarity = check_similarity_anchor(artist_name)
+                status = 'verified'
+                needs_manual = False
+
+                if not passed_similarity:
+                    status = 'pending'
+                    needs_manual = True
+
+                print(f"    [DISCOVERED] {artist_name} is punk! (Status: {status}, Tags: {', '.join(tags[:5])})")
+
+                # Add to artists table
+                try:
+                    supabase.table("artists").insert({
+                        "name": artist_name,
+                        "is_core": False,
+                        "is_discovered": True,
+                        "genre_tags": tags,
+                        "status": status,
+                        "needs_manual_verification": needs_manual
+                    }).execute()
+                    known_artists.add(artist_name)
+
+                    # Only show in UI if not blocked
+                    event['priority'] = 'medium' if status == 'verified' else 'low'
+                    event['discovery_source'] = 'Songkick Scraper'
+                    upsert_events([event], True)
+                except Exception as e:
+                    print(f"    Error adding discovered artist {artist_name}: {e}")
 
     print("\n--- SCOUT SUMMARY ---")
     print(f"Total events upserted: {summary['events_upserted']}")

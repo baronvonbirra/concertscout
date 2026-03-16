@@ -149,5 +149,48 @@ class TestScout(unittest.TestCase):
         self.assertEqual(events[2]['artist'], "Artist 3")
         self.assertEqual(mock_get.call_count, 2)
 
+    @patch('scout.get_artist_tags')
+    def test_passes_tag_filter(self, mock_tags):
+        # Case 1: More Punk than Blacklist
+        mock_tags.return_value = ['punk', 'hardcore', 'rock', 'alternative', 'indie', 'pop']
+        passed, tags = scout.passes_tag_filter("Good Band")
+        self.assertTrue(passed)
+
+        # Case 2: More Blacklist than Punk in top 5
+        # Top 5: pop, latin, reggaeton, punk, rock -> 3 blacklist, 1 punk
+        mock_tags.return_value = ['pop', 'latin', 'reggaeton', 'punk', 'rock', 'oi', 'hardcore']
+        passed, tags = scout.passes_tag_filter("Bad Band")
+        self.assertFalse(passed)
+
+        # Case 3: Equal Punk and Blacklist in top 5
+        # Top 5: punk, pop, hardcore, latin, rock -> 2 punk, 2 blacklist
+        mock_tags.return_value = ['punk', 'pop', 'hardcore', 'latin', 'rock']
+        passed, tags = scout.passes_tag_filter("Mid Band")
+        self.assertTrue(passed)
+
+    @patch('scout.requests.get')
+    @patch('scout.supabase')
+    @patch('scout.LASTFM_API_KEY', 'test_key')
+    def test_check_similarity_anchor(self, mock_supabase, mock_get):
+        # Mock Last.fm similar artists
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "similarartists": {
+                "artist": [
+                    {"name": "Similar 1"},
+                    {"name": "Similar 2"}
+                ]
+            }
+        }
+        mock_get.return_value = mock_response
+
+        # Case 1: Match in DB
+        mock_supabase.table().select().in_().or_().execute.return_value = MagicMock(data=[{"name": "Similar 1"}])
+        self.assertTrue(scout.check_similarity_anchor("New Artist"))
+
+        # Case 2: No match in DB
+        mock_supabase.table().select().in_().or_().execute.return_value = MagicMock(data=[])
+        self.assertFalse(scout.check_similarity_anchor("Unknown Artist"))
+
 if __name__ == '__main__':
     unittest.main()
