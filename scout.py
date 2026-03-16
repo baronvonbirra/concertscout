@@ -197,9 +197,22 @@ def scrape_songkick_city(city_id, country, city_name):
                     print(f"    Reached date {date_str}, stopping pagination.")
                     return all_events
 
-                # Venue: a.venue-link
-                venue_tag = li.find('a', class_='venue-link')
-                venue = venue_tag.get_text(strip=True) if venue_tag else "Unknown"
+                # Venue & City: p.location
+                location_tag = li.find('p', class_='location')
+                venue = "Unknown"
+                event_city = city_name
+                event_country = country
+
+                if location_tag:
+                    venue_tag = location_tag.find('a', class_='venue-link')
+                    if venue_tag:
+                        venue = venue_tag.get_text(strip=True)
+
+                    loc_text = location_tag.get_text(strip=True)
+                    parts = [p.strip() for p in loc_text.split(',')]
+                    if len(parts) >= 2:
+                        event_country = parts[-1]
+                        event_city = parts[-2]
 
                 # Ticket URL: a.event-link
                 link_tag = li.find('a', class_='event-link')
@@ -210,9 +223,9 @@ def scrape_songkick_city(city_id, country, city_name):
                     "date": date_str,
                     "venue": venue,
                     "ticket_url": event_url,
-                    "city": city_name,
+                    "city": event_city,
                     "source": "Songkick",
-                    "is_proximity": is_proximity_event(country, city_name)
+                    "is_proximity": is_proximity_event(event_country, event_city)
                 })
                 page_events_count += 1
 
@@ -363,6 +376,22 @@ def get_similar_punk_artists(artist_id, artist_name):
         print(f"Error with Last.fm for {artist_name}: {e}")
         return []
 
+def remove_past_events():
+    """
+    Removes events with a date older than today.
+    """
+    if not supabase:
+        return
+
+    today = datetime.now().date().isoformat()
+    print(f"--- Sweeping past events (older than {today}) ---")
+    try:
+        # Supabase delete with filter
+        response = supabase.table("events").delete().lt("date", today).execute()
+        print(f"  Removed past events.")
+    except Exception as e:
+        print(f"  Error removing past events: {e}")
+
 def upsert_events(events, is_recommendation):
     if not supabase or not events:
         return 0
@@ -418,6 +447,9 @@ def get_artist_tags(artist_name):
 
 def main():
     print("Starting PUNK-SCOUT City-Scraper Engine...")
+
+    # 0. Maintenance: Remove past events
+    remove_past_events()
 
     # 1. Update Linktrees for High Priority Artists (Keep this logic)
     core_artists = get_core_artists()
