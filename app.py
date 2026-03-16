@@ -148,9 +148,6 @@ st.markdown("""
     /* Global Background and Text */
     .stApp {
         background-color: #000000;
-        background-image:
-            url("https://www.transparenttextures.com/patterns/carbon-fibre.png"), /* Carbon fibre texture */
-            url("https://www.transparenttextures.com/patterns/pinstriped-suit.png"); /* Xerox-like grain */
         color: #FFFFFF;
         font-family: 'Courier New', Courier, monospace;
     }
@@ -183,7 +180,6 @@ st.markdown("""
         content: "";
         position: absolute;
         top: 0; left: 0; right: 0; bottom: 0;
-        background: url("https://www.transparenttextures.com/patterns/asfalt-dark.png");
         opacity: 0.2;
         pointer-events: none;
     }
@@ -323,8 +319,16 @@ def display_event_card(row, has_leak=False):
 def main():
     st.title("PUNK-SCOUT V2.0")
 
+    if 'display_limit' not in st.session_state:
+        st.session_state.display_limit = 20
+
     events_df = fetch_events()
     artists_df = fetch_artists()
+
+    if not events_df.empty:
+        selected_cities = st.sidebar.multiselect("FILTER BY CITY", options=sorted(events_df['city'].unique()))
+        if selected_cities:
+            events_df = events_df[events_df['city'].isin(selected_cities)]
 
     # Simple logic to identify "leaks": artists with high priority and linktree snapshots
     # (In a real scenario, we might track if the snapshot changed RECENTLY)
@@ -347,7 +351,8 @@ def main():
         with col1:
             st.header("THE PIT (CORE)")
             if not core_events.empty:
-                for _, row in core_events.iterrows():
+                display_df = core_events.head(st.session_state.display_limit)
+                for _, row in display_df.iterrows():
                     display_event_card(row, has_leak=row['artist'] in leaky_artists)
             else:
                 st.write("EMPTY PIT.")
@@ -355,10 +360,16 @@ def main():
         with col2:
             st.header("THE DISTRO (DISTRO/RECS)")
             if not rec_events.empty:
-                for _, row in rec_events.iterrows():
+                display_df = rec_events.head(st.session_state.display_limit)
+                for _, row in display_df.iterrows():
                     display_event_card(row, has_leak=row['artist'] in leaky_artists)
             else:
                 st.write("NO RECOMMENDATIONS.")
+
+        if len(core_events) > st.session_state.display_limit or len(rec_events) > st.session_state.display_limit:
+            if st.button("LOAD MORE"):
+                st.session_state.display_limit += 20
+                st.rerun()
 
 if __name__ == "__main__":
     main()
