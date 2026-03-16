@@ -11,7 +11,10 @@ CREATE TABLE IF NOT EXISTS artists (
     priority_level TEXT,
     last_checked TIMESTAMP WITH TIME ZONE,
     is_discovered BOOLEAN DEFAULT false,
-    genre_tags JSONB
+    genre_tags JSONB,
+    status TEXT DEFAULT 'verified',
+    needs_manual_verification BOOLEAN DEFAULT false,
+    source TEXT
 );
 
 -- Events table

@@ -271,22 +271,35 @@ supabase = get_supabase_client()
 def fetch_events():
     if not supabase:
         return pd.DataFrame()
+
+    # 1. Fetch artists that are NOT blocked
+    blocked_res = supabase.table("artists").select("name").eq("status", "blocked").execute()
+    blocked_names = [a['name'] for a in blocked_res.data]
+
+    # 2. Fetch events
     response = supabase.table("events").select("*").execute()
-    return pd.DataFrame(response.data)
+    df = pd.DataFrame(response.data)
+
+    if not df.empty and blocked_names:
+        df = df[~df['artist'].isin(blocked_names)]
+
+    return df
 
 def fetch_artists():
     if not supabase:
         return pd.DataFrame()
-    response = supabase.table("artists").select("name, last_linktree_snapshot, priority_level").execute()
+    response = supabase.table("artists").select("name, last_linktree_snapshot, priority_level, status, needs_manual_verification").neq("status", "blocked").execute()
     return pd.DataFrame(response.data)
 
-def display_event_card(row, has_leak=False):
+def display_event_card(row, has_leak=False, is_pending=False):
     badges = ""
-    if has_leak:
+    if has_leak and not is_pending:
         badges += '<span class="badge badge-leak">FAST-PASS / LEAK</span>'
 
     priority = str(row.get('priority', '')).lower()
-    if priority == 'high':
+    if is_pending:
+        badges += '<span class="badge" style="background-color: #888888; color: #FFFFFF;">PENDING VERIFICATION</span>'
+    elif priority == 'high':
         badges += '<span class="badge" style="background-color: #E60000; color: #FFFFFF;">RED ALERT</span>'
     elif priority == 'medium':
         badges += '<span class="badge" style="background-color: #39FF14; color: #000000;">DISCOVERY</span>'
@@ -331,12 +344,15 @@ def main():
             events_df = events_df[events_df['city'].isin(selected_cities)]
 
     # Simple logic to identify "leaks": artists with high priority and linktree snapshots
-    # (In a real scenario, we might track if the snapshot changed RECENTLY)
-    # For now, let's say if priority is high, we show the badge as it's been "sniffed"
     leaky_artists = set()
+    pending_artists = set()
     if not artists_df.empty:
         leaky_artists = set(artists_df[
             (artists_df['priority_level'].str.lower().isin(['high', '10', 'top']))
+        ]['name'])
+
+        pending_artists = set(artists_df[
+            (artists_df['status'] == 'pending') | (artists_df['needs_manual_verification'] == True)
         ]['name'])
 
     if events_df.empty:
@@ -353,7 +369,12 @@ def main():
             if not core_events.empty:
                 display_df = core_events.head(st.session_state.display_limit)
                 for _, row in display_df.iterrows():
-                    display_event_card(row, has_leak=row['artist'] in leaky_artists)
+                    is_pending = row['artist'] in pending_artists
+                    display_event_card(
+                        row,
+                        has_leak=row['artist'] in leaky_artists,
+                        is_pending=is_pending
+                    )
             else:
                 st.write("EMPTY PIT.")
 
@@ -362,7 +383,12 @@ def main():
             if not rec_events.empty:
                 display_df = rec_events.head(st.session_state.display_limit)
                 for _, row in display_df.iterrows():
-                    display_event_card(row, has_leak=row['artist'] in leaky_artists)
+                    is_pending = row['artist'] in pending_artists
+                    display_event_card(
+                        row,
+                        has_leak=row['artist'] in leaky_artists,
+                        is_pending=is_pending
+                    )
             else:
                 st.write("NO RECOMMENDATIONS.")
 
