@@ -85,26 +85,18 @@ class TestScout(unittest.TestCase):
     @patch('scout.time.sleep')
     def test_scrape_songkick_city_pagination(self, mock_sleep, mock_get):
         # Mocking 2 pages of results
-        # Page 1 has 2 events in 2026
+        # Page 1 has 1 event with 2 artists in 2026
         # Page 2 has 1 event in 2026 and 1 in 2027
 
         html_page1 = """
         <html>
             <li class="event-listings-element">
-                <p class="artists"><strong>Artist 1</strong></p>
+                <p class="artists"><strong>Artist 1</strong><strong>Artist 2</strong></p>
                 <time datetime="2026-05-01T20:00:00"></time>
                 <p class="location">
                     <a class="venue-link">Venue 1</a>, City 1, Country 1
                 </p>
                 <a class="event-link" href="/concerts/1"></a>
-            </li>
-            <li class="event-listings-element">
-                <p class="artists"><strong>Artist 2</strong></p>
-                <time datetime="2026-06-01T20:00:00"></time>
-                <p class="location">
-                    <a class="venue-link">Venue 2</a>, City 2, Country 2
-                </p>
-                <a class="event-link" href="/concerts/2"></a>
             </li>
         </html>
         """
@@ -142,7 +134,7 @@ class TestScout(unittest.TestCase):
 
         events = scout.scrape_songkick_city("123", "Spain", "Madrid")
 
-        # Should have 3 events (2 from page 1, 1 from page 2 before hitting 2027)
+        # Should have 3 events (2 from page 1 (multiple artists), 1 from page 2 before hitting 2027)
         self.assertEqual(len(events), 3)
         self.assertEqual(events[0]['artist'], "Artist 1")
         self.assertEqual(events[1]['artist'], "Artist 2")
@@ -154,6 +146,11 @@ class TestScout(unittest.TestCase):
         # Case 1: More Punk than Blacklist
         mock_tags.return_value = ['punk', 'hardcore', 'rock', 'alternative', 'indie', 'pop']
         passed, tags = scout.passes_tag_filter("Good Band")
+        self.assertTrue(passed)
+
+        # Case 1.5: Ska is qualifying
+        mock_tags.return_value = ['ska', 'punk', 'rock', 'alternative', 'indie']
+        passed, tags = scout.passes_tag_filter("Ska Band")
         self.assertTrue(passed)
 
         # Case 2: More Blacklist than Punk in top 5
