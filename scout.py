@@ -51,6 +51,12 @@ summary = {
 
 PUNK_KEYWORDS = {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
 BLACK_LIST_KEYWORDS = {'pop', 'latin', 'reggaeton', 'ballad', 'romantico'}
+IMMEDIATE_DEATH_KEYWORDS = {
+    'infantil', 'childrens music', "children's music", 'kids',
+    'soundtrack', 'score', 'classical', 'instrumental',
+    'electronic', 'techno', 'house', 'trance', 'ambient',
+    'hip hop', 'rap', 'trap', 'reggaeton'
+}
 
 def get_core_artists():
     if not supabase:
@@ -470,13 +476,26 @@ def get_artist_tags(artist_name):
 def passes_tag_filter(artist_name):
     """
     Genre Guardian: Tag Scoring Rule.
-    Fetch top 10 tags. If artist has more Blacklist tags than Punk tags in their top 5, discard.
+    Fetch top 10 tags.
+    1. Immediate Death: If any tag in Top 5 is in IMMEDIATE_DEATH_KEYWORDS, discard.
+    2. Ratio Rule: If artist has more Blacklist tags than Punk tags in their top 5, discard.
     """
     tags = get_artist_tags(artist_name)
     if not tags:
         return False, []
 
     top_5 = tags[:5]
+
+    # 1. Immediate Death Rule
+    for t in top_5:
+        # Safer matching: check for whole word or exact match to avoid blocking bands like 'The Skids' with 'kids' keyword
+        t_normalized = f" {t.lower().replace('-', ' ')} "
+        for dk in IMMEDIATE_DEATH_KEYWORDS:
+            if dk in t_normalized or dk == t:
+                print(f"    [GENRE GUARDIAN] {artist_name} hit Immediate Death keyword in tags: {t}")
+                return False, tags
+
+    # 2. Ratio Rule
     punk_count = sum(1 for t in top_5 if any(pk in t for pk in PUNK_KEYWORDS))
     blacklist_count = sum(1 for t in top_5 if any(bk in t for bk in BLACK_LIST_KEYWORDS))
 
@@ -608,28 +627,37 @@ def main():
                         print(f"    Error blocking artist {artist_name}: {e}")
                     continue
 
-                # Passes tags, check similarity
+                # Passes tags, check similarity (MANDATORY Anchor Validation)
                 passed_similarity = check_similarity_anchor(artist_name)
-                status = 'verified'
-                needs_manual = False
 
                 if not passed_similarity:
-                    status = 'pending'
-                    needs_manual = True
+                    # Rejected by Anchor Validation
+                    try:
+                        supabase.table("artists").insert({
+                            "name": artist_name,
+                            "is_core": False,
+                            "is_discovered": True,
+                            "genre_tags": tags,
+                            "status": 'blocked'
+                        }).execute()
+                        known_artists_map[artist_name] = {"name": artist_name, "status": "blocked", "is_core": False}
+                    except Exception as e:
+                        print(f"    Error blocking artist {artist_name} (Failed Similarity Anchor): {e}")
+                    continue
 
-                print(f"    [DISCOVERED] {artist_name} is punk! (Status: {status}, Tags: {', '.join(tags[:5])})")
+                print(f"    [DISCOVERED] {artist_name} is punk! (Passed Anchor Validation, Tags: {', '.join(tags[:5])})")
 
-                # Add to artists table
+                # Add to artists table as verified
                 try:
                     supabase.table("artists").insert({
                         "name": artist_name,
                         "is_core": False,
                         "is_discovered": True,
                         "genre_tags": tags,
-                        "status": status,
-                        "needs_manual_verification": needs_manual
+                        "status": 'verified',
+                        "needs_manual_verification": False
                     }).execute()
-                    known_artists_map[artist_name] = {"name": artist_name, "status": status, "is_core": False}
+                    known_artists_map[artist_name] = {"name": artist_name, "status": 'verified', "is_core": False}
 
                     # Only show in UI if not blocked
                     event['priority'] = 'medium'
