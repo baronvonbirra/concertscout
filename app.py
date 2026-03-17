@@ -212,85 +212,86 @@ def main():
     events_json = json.dumps(data)
 
     # NEO-BRUTALIST FRONTEND TEMPLATE
-    neo_brutalist_html = f"""
+    html_template = textwrap.dedent("""\
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <script src="https://cdn.tailwindcss.com"></script>
         <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
         <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
         <style>
-            body {{
+            body {
                 background-color: #121212;
                 color: #FFFFFF;
                 font-family: 'Inter', sans-serif;
-            }}
-            .brutal-card {{
+            }
+            .brutal-card {
                 background-color: #FFFFFF;
                 color: #000000;
                 border: 4px solid #000000;
                 box-shadow: 8px 8px 0px 0px rgba(0,0,0,1);
                 transition: all 0.2s ease;
-            }}
-            .brutal-card:hover {{
+            }
+            .brutal-card:hover {
                 transform: translate(-2px, -2px);
                 box-shadow: 10px 10px 0px 0px rgba(0,0,0,1);
-            }}
-            .bebas {{ font-family: 'Bebas Neue', cursive; }}
-            .mono {{ font-family: 'JetBrains Mono', monospace; }}
-            .safety-orange {{ border-color: #FF5733 !important; }}
-            .acid-lime {{ color: #CCFF00; }}
-            .bg-acid-lime {{ background-color: #CCFF00; }}
-            .pill {{
+            }
+            .bebas { font-family: 'Bebas Neue', cursive; }
+            .mono { font-family: 'JetBrains Mono', monospace; }
+            .safety-orange { border-color: #FF5733 !important; }
+            .acid-lime { color: #CCFF00; }
+            .bg-acid-lime { background-color: #CCFF00; }
+            .pill {
                 border: 2px solid #FFFFFF;
-                padding: 4px 12px;
+                padding: 8px 16px;
                 cursor: pointer;
                 transition: all 0.2s;
-            }}
-            .pill.active {{
+            }
+            .pill.active {
                 background-color: #CCFF00;
                 color: #000000;
                 border-color: #CCFF00;
-            }}
+            }
         </style>
         <script>
-            window.concertData = {events_json};
+            window.concertData = __CONCERT_DATA__;
         </script>
     </head>
     <body>
-        <div x-data="{{
+        <div x-data="{
             search: '',
             city: 'All',
             discovery: false,
             events: window.concertData,
-            get filteredEvents() {{
-                return this.events.filter(e => {{
+            get filteredEvents() {
+                return this.events.filter(e => {
                     const matchSearch = e.artist.toLowerCase().includes(this.search.toLowerCase()) ||
                                         e.venue.toLowerCase().includes(this.search.toLowerCase());
                     const matchCity = this.city === 'All' || e.city === this.city;
                     const matchDiscovery = this.discovery ? e.is_recommendation : !e.is_recommendation;
                     return matchSearch && matchCity && matchDiscovery;
-                }});
-            }},
-            get cities() {{
+                });
+            },
+            get cities() {
                 return ['All', ...new Set(this.events.map(e => e.city))].sort();
-            }}
-        }}" class="p-4 md:p-8">
+            }
+        }" class="p-4 md:p-8">
 
             <!-- Header & Search -->
             <div class="mb-12">
-                <h1 class="bebas text-6xl md:text-8xl mb-6 tracking-tighter">PUNK-SCOUT <span class="acid-lime">NEO</span></h1>
+                <h1 class="bebas text-5xl md:text-8xl mb-6 tracking-tighter">PUNK-SCOUT <span class="acid-lime">NEO</span></h1>
 
                 <div class="flex flex-col md:flex-row gap-4 mb-8">
                     <input type="text" x-model="search" placeholder="SEARCH AS YOU TYPE..."
-                           class="w-full md:w-1/2 bg-white text-black border-4 border-black p-4 text-2xl mono focus:outline-none shadow-[4px_4px_0px_0px_rgba(204,255,0,1)]">
+                           class="w-full md:w-1/2 bg-white text-black border-4 border-black p-4 text-xl md:text-2xl mono focus:outline-none shadow-[4px_4px_0px_0px_rgba(204,255,0,1)]">
 
                     <div class="flex border-4 border-white overflow-hidden">
                         <button @click="discovery = false" :class="!discovery ? 'bg-white text-black' : 'text-white'"
-                                class="px-6 py-2 bebas text-2xl transition-all">MY BANDS</button>
+                                class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all">MY BANDS</button>
                         <button @click="discovery = true" :class="discovery ? 'bg-acid-lime text-black' : 'text-white'"
-                                class="px-6 py-2 bebas text-2xl transition-all border-l-4 border-white">NEW DISCOVERIES</button>
+                                class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all border-l-4 border-white">NEW DISCOVERIES</button>
                     </div>
                 </div>
 
@@ -361,8 +362,8 @@ def main():
         </div>
     </body>
     </html>
-    """
-    st.components.v1.html(neo_brutalist_html, height=1200, scrolling=True)
+    """).strip()
+    st.components.v1.html(html_template.replace("__CONCERT_DATA__", events_json), height=1200, scrolling=True)
 
 if __name__ == "__main__":
     main()

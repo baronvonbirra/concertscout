@@ -1,5 +1,6 @@
 import os
 import shutil
+import json
 
 def generate():
     dist_dir = "dist"
@@ -28,6 +29,11 @@ def generate():
 
     env_content = f"SUPABASE_URL={supabase_url}\nSUPABASE_KEY={supabase_key}\n"
 
+    # Use json.dumps to safely escape the strings for injection into JavaScript
+    # and then replace any remaining </script> with <\/script>
+    app_code_json = json.dumps(app_code).replace("</script>", "<\\/script>")
+    env_content_json = json.dumps(env_content).replace("</script>", "<\\/script>")
+
     index_html = f"""
 <!DOCTYPE html>
 <html>
@@ -54,8 +60,8 @@ def generate():
           requirements: {requirements},
           entrypoint: "app.py",
           files: {{
-            "app.py": {repr(app_code)},
-            ".env": {repr(env_content)}
+            "app.py": {app_code_json},
+            ".env": {env_content_json}
           }},
         }},
         document.getElementById("root")
