@@ -165,6 +165,17 @@ class TestScout(unittest.TestCase):
         passed, tags = scout.passes_tag_filter("Mid Band")
         self.assertTrue(passed)
 
+        # Case 4: Immediate Death keyword
+        # Top 5 contains 'techno'
+        mock_tags.return_value = ['punk', 'hardcore', 'techno', 'rock', 'metal']
+        passed, tags = scout.passes_tag_filter("Techno Band")
+        self.assertFalse(passed)
+
+        # Case 5: Immediate Death keyword 'infantil'
+        mock_tags.return_value = ['infantil', 'kids', 'childrens music', 'punk', 'hardcore']
+        passed, tags = scout.passes_tag_filter("Kids Band")
+        self.assertFalse(passed)
+
     @patch('scout.requests.get')
     @patch('scout.supabase')
     @patch('scout.LASTFM_API_KEY', 'test_key')
