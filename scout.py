@@ -25,6 +25,14 @@ if not BANDSINTOWN_APP_ID:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0"
+]
+
 # Limits and Rate Limiting
 LAST_FM_LOOKUP_LIMIT = 20
 TOTAL_SCAN_LIMIT = 200
@@ -50,11 +58,11 @@ def get_core_artists():
     response = supabase.table("artists").select("*").eq("is_core", True).execute()
     return response.data
 
-def get_all_artists_names():
+def get_known_artists():
     if not supabase:
-        return set()
-    response = supabase.table("artists").select("name").execute()
-    return {a['name'] for a in response.data}
+        return {}
+    response = supabase.table("artists").select("name, status, is_core").execute()
+    return {a['name']: a for a in response.data}
 
 def get_rotation_artists(limit):
     if not supabase:
@@ -156,9 +164,6 @@ def scrape_songkick_city(city_id, country, city_name):
     Covers all events until the end of 2026.
     """
     base_url = f"https://www.songkick.com/metro-areas/{city_id}-{country.lower()}-{city_name.lower().replace(' ', '-')}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
 
     all_events = []
     page = 1
@@ -167,6 +172,7 @@ def scrape_songkick_city(city_id, country, city_name):
     while page <= max_pages:
         url = f"{base_url}?page={page}"
         print(f"  Scraping page {page} of {city_name}...")
+        headers = {"User-Agent": random.choice(USER_AGENTS)}
 
         # Rate limiting
         time.sleep(RATE_LIMIT_DELAY)
@@ -183,17 +189,23 @@ def scrape_songkick_city(city_id, country, city_name):
 
             page_events_count = 0
             for li in listings:
-                # Artist: p.artists strong
+                # Artist: p.artists strong (can be multiple)
                 artist_tag = li.find('p', class_='artists')
-                artist_name = "Unknown"
+                artists = []
                 if artist_tag:
-                    strong = artist_tag.find('strong')
-                    if strong:
-                        artist_name = strong.get_text(strip=True)
+                    strongs = artist_tag.find_all('strong')
+                    if strongs:
+                        artists = [s.get_text(strip=True) for s in strongs]
 
-                # Date: time[datetime]
+                if not artists:
+                    artists = ["Unknown"]
+
+                # Date: time[datetime] or fallback to text
                 time_tag = li.find('time')
-                date_str = time_tag.get('datetime').split('T')[0] if time_tag and time_tag.get('datetime') else "Unknown"
+                if time_tag and time_tag.get('datetime'):
+                    date_str = time_tag.get('datetime').split('T')[0]
+                else:
+                    date_str = "Unknown"
 
                 # Stop if we hit 2027
                 if date_str != "Unknown" and date_str >= "2027-01-01":
@@ -207,29 +219,36 @@ def scrape_songkick_city(city_id, country, city_name):
                 event_country = country
 
                 if location_tag:
+                    # Robust extraction: look for venue-link specifically
                     venue_tag = location_tag.find('a', class_='venue-link')
                     if venue_tag:
                         venue = venue_tag.get_text(strip=True)
 
-                    loc_text = location_tag.get_text(strip=True)
-                    parts = [p.strip() for p in loc_text.split(',')]
+                    # Use separator to avoid clumping text
+                    loc_text = location_tag.get_text(separator=',', strip=True)
+                    parts = [p.strip() for p in loc_text.split(',') if p.strip()]
+
                     if len(parts) >= 2:
                         event_country = parts[-1]
                         event_city = parts[-2]
+                        # If venue was not found via link, try the first part
+                        if venue == "Unknown" and len(parts) > 2:
+                            venue = parts[0]
 
                 # Ticket URL: a.event-link
                 link_tag = li.find('a', class_='event-link')
                 event_url = f"https://www.songkick.com{link_tag.get('href')}" if link_tag and link_tag.get('href') else "#"
 
-                all_events.append({
-                    "artist": artist_name,
-                    "date": date_str,
-                    "venue": venue,
-                    "ticket_url": event_url,
-                    "city": event_city,
-                    "source": "Songkick",
-                    "is_proximity": is_proximity_event(event_country, event_city)
-                })
+                for artist_name in artists:
+                    all_events.append({
+                        "artist": artist_name,
+                        "date": date_str,
+                        "venue": venue,
+                        "ticket_url": event_url,
+                        "city": event_city,
+                        "source": "Songkick",
+                        "is_proximity": is_proximity_event(event_country, event_city)
+                    })
                 page_events_count += 1
 
             print(f"    Found {page_events_count} events on page {page}.")
@@ -357,7 +376,7 @@ def get_similar_punk_artists(artist_id, artist_name):
             tags_data = tags_response.json()
             tags = [t['name'].lower() for t in tags_data.get('toptags', {}).get('tag', [])]
 
-            punk_keywords = ['punk', 'hardcore', 'crust', 'post-punk']
+            punk_keywords = ['punk', 'hardcore', 'crust', 'post-punk', 'ska']
             is_punk = any(keyword in ' '.join(tags) for keyword in punk_keywords)
 
             if is_punk:
@@ -544,7 +563,7 @@ def main():
 
     print(f"Scanning {len(filtered_locations)} locations...")
 
-    known_artists = get_all_artists_names()
+    known_artists_map = get_known_artists()
 
     for loc in filtered_locations:
         city_id = loc['songkick_id']
@@ -558,10 +577,16 @@ def main():
         for event in scraped_events:
             artist_name = event['artist']
 
-            if artist_name in known_artists:
+            if artist_name in known_artists_map:
+                artist_info = known_artists_map[artist_name]
+                if artist_info.get('status') == 'blocked':
+                    print(f"  [SKIPPED] {artist_name} is blocked.")
+                    continue
+
                 print(f"  [MATCH] {artist_name} is in our watchlist.")
                 event['priority'] = 'high'
-                event['discovery_source'] = 'Core List'
+                # If it's a known non-core artist, it might still be a discovery source from before
+                event['discovery_source'] = 'Core List' if artist_info.get('is_core') else 'Watchlist'
                 upsert_events([event], False)
             else:
                 # Discovery logic
@@ -578,7 +603,7 @@ def main():
                             "genre_tags": tags,
                             "status": 'blocked'
                         }).execute()
-                        known_artists.add(artist_name)
+                        known_artists_map[artist_name] = {"name": artist_name, "status": "blocked", "is_core": False}
                     except Exception as e:
                         print(f"    Error blocking artist {artist_name}: {e}")
                     continue
@@ -604,10 +629,10 @@ def main():
                         "status": status,
                         "needs_manual_verification": needs_manual
                     }).execute()
-                    known_artists.add(artist_name)
+                    known_artists_map[artist_name] = {"name": artist_name, "status": status, "is_core": False}
 
                     # Only show in UI if not blocked
-                    event['priority'] = 'medium' if status == 'verified' else 'low'
+                    event['priority'] = 'medium'
                     event['discovery_source'] = 'Songkick Scraper'
                     upsert_events([event], True)
                 except Exception as e:
