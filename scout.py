@@ -61,14 +61,30 @@ IMMEDIATE_DEATH_KEYWORDS = {
 def get_core_artists():
     if not supabase:
         return []
-    response = supabase.table("artists").select("*").eq("is_core", True).execute()
-    return response.data
+    all_data = []
+    page_size = 1000
+    start = 0
+    while True:
+        response = supabase.table("artists").select("*").eq("is_core", True).range(start, start + page_size - 1).execute()
+        all_data.extend(response.data)
+        if len(response.data) < page_size:
+            break
+        start += page_size
+    return all_data
 
 def get_known_artists():
     if not supabase:
         return {}
-    response = supabase.table("artists").select("name, status, is_core").execute()
-    return {a['name']: a for a in response.data}
+    all_data = []
+    page_size = 1000
+    start = 0
+    while True:
+        response = supabase.table("artists").select("name, status, is_core").range(start, start + page_size - 1).execute()
+        all_data.extend(response.data)
+        if len(response.data) < page_size:
+            break
+        start += page_size
+    return {a['name']: a for a in all_data}
 
 def get_rotation_artists(limit):
     if not supabase:
@@ -85,8 +101,16 @@ def get_rotation_artists(limit):
 def get_locations():
     if not supabase:
         return []
-    response = supabase.table("locations").select("*").execute()
-    return response.data
+    all_data = []
+    page_size = 1000
+    start = 0
+    while True:
+        response = supabase.table("locations").select("*").range(start, start + page_size - 1).execute()
+        all_data.extend(response.data)
+        if len(response.data) < page_size:
+            break
+        start += page_size
+    return all_data
 
 def update_artist_last_checked(artist_id):
     if not supabase:
@@ -101,8 +125,16 @@ def update_artist_last_checked(artist_id):
 def get_artists_patches():
     if not supabase:
         return {}
-    response = supabase.table("artists").select("name, bandsintown_patch").execute()
-    return {a['name']: a['bandsintown_patch'] for a in response.data if a.get('bandsintown_patch')}
+    all_data = []
+    page_size = 1000
+    start = 0
+    while True:
+        response = supabase.table("artists").select("name, bandsintown_patch").range(start, start + page_size - 1).execute()
+        all_data.extend(response.data)
+        if len(response.data) < page_size:
+            break
+        start += page_size
+    return {a['name']: a['bandsintown_patch'] for a in all_data if a.get('bandsintown_patch')}
 
 def is_proximity_event(country, city):
     if country == 'Spain':
@@ -596,6 +628,16 @@ def main():
         for event in scraped_events:
             artist_name = event['artist']
 
+            if artist_name not in known_artists_map and supabase:
+                # Double check DB for missing artists
+                try:
+                    res = supabase.table("artists").select("name, status, is_core").eq("name", artist_name).execute()
+                    if res.data:
+                        known_artists_map[artist_name] = res.data[0]
+                        print(f"  [CACHE REFRESH] Found {artist_name} in DB.")
+                except Exception as e:
+                    print(f"  Error checking DB for {artist_name}: {e}")
+
             if artist_name in known_artists_map:
                 artist_info = known_artists_map[artist_name]
                 if artist_info.get('status') == 'blocked':
@@ -624,7 +666,13 @@ def main():
                         }).execute()
                         known_artists_map[artist_name] = {"name": artist_name, "status": "blocked", "is_core": False}
                     except Exception as e:
-                        print(f"    Error blocking artist {artist_name}: {e}")
+                        if hasattr(e, 'code') and e.code == '23505':
+                            # Duplicate key, fetch existing
+                            res = supabase.table("artists").select("name, status, is_core").eq("name", artist_name).execute()
+                            if res.data:
+                                known_artists_map[artist_name] = res.data[0]
+                        else:
+                            print(f"    Error blocking artist {artist_name}: {e}")
                     continue
 
                 # Passes tags, check similarity (MANDATORY Anchor Validation)
@@ -642,7 +690,12 @@ def main():
                         }).execute()
                         known_artists_map[artist_name] = {"name": artist_name, "status": "blocked", "is_core": False}
                     except Exception as e:
-                        print(f"    Error blocking artist {artist_name} (Failed Similarity Anchor): {e}")
+                        if hasattr(e, 'code') and e.code == '23505':
+                            res = supabase.table("artists").select("name, status, is_core").eq("name", artist_name).execute()
+                            if res.data:
+                                known_artists_map[artist_name] = res.data[0]
+                        else:
+                            print(f"    Error blocking artist {artist_name} (Failed Similarity Anchor): {e}")
                     continue
 
                 print(f"    [DISCOVERED] {artist_name} is punk! (Passed Anchor Validation, Tags: {', '.join(tags[:5])})")
@@ -664,7 +717,12 @@ def main():
                     event['discovery_source'] = 'Songkick Scraper'
                     upsert_events([event], True)
                 except Exception as e:
-                    print(f"    Error adding discovered artist {artist_name}: {e}")
+                    if hasattr(e, 'code') and e.code == '23505':
+                        res = supabase.table("artists").select("name, status, is_core").eq("name", artist_name).execute()
+                        if res.data:
+                            known_artists_map[artist_name] = res.data[0]
+                    else:
+                        print(f"    Error adding discovered artist {artist_name}: {e}")
 
     print("\n--- SCOUT SUMMARY ---")
     print(f"Total events upserted: {summary['events_upserted']}")
