@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS keywords (
 -- Trigger to prevent blacklisted artists at DB level
 -- Corrected for TEXT genre_tags column containing JSON strings
 CREATE OR REPLACE FUNCTION validate_artist_tags()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS $func$
 DECLARE
     found_keyword TEXT;
     tags_jsonb JSONB;
@@ -101,8 +101,9 @@ BEGIN
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
+-- Always re-create the trigger to ensure it's using the latest function
 DROP TRIGGER IF EXISTS artist_tags_validation ON artists;
 CREATE TRIGGER artist_tags_validation
 BEFORE INSERT OR UPDATE ON artists
