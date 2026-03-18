@@ -61,11 +61,16 @@ CREATE TABLE IF NOT EXISTS keywords (
 -- Trigger to prevent blacklisted artists at DB level
 -- Corrected for TEXT genre_tags column containing JSON strings
 CREATE OR REPLACE FUNCTION validate_artist_tags()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS $func$
 DECLARE
     found_keyword TEXT;
     tags_jsonb JSONB;
 BEGIN
+    -- Bypass validation if the artist is being blocked anyway
+    IF NEW.status = 'blocked' THEN
+        RETURN NEW;
+    END IF;
+
     IF NEW.genre_tags IS NULL OR NEW.genre_tags = '' OR NEW.genre_tags = '[]' THEN
         RETURN NEW;
     END IF;
@@ -79,13 +84,14 @@ BEGIN
     END;
 
     -- Check for 'death' or 'blacklist' keywords in the genre_tags JSONB array
+    -- Uses \y for word boundaries to avoid false positives (e.g., 'kids' matching 'skids')
     SELECT k.word INTO found_keyword
     FROM keywords k
     WHERE k.category IN ('death', 'blacklist')
       AND EXISTS (
           SELECT 1
           FROM jsonb_array_elements_text(tags_jsonb) AS tag
-          WHERE tag ILIKE '%' || k.word || '%'
+          WHERE tag ~* ('\y' || k.word || '\y')
       )
     LIMIT 1;
 
@@ -95,8 +101,9 @@ BEGIN
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$func$ LANGUAGE plpgsql;
 
+-- Always re-create the trigger to ensure it's using the latest function
 DROP TRIGGER IF EXISTS artist_tags_validation ON artists;
 CREATE TRIGGER artist_tags_validation
 BEFORE INSERT OR UPDATE ON artists

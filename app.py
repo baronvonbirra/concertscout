@@ -185,8 +185,13 @@ def fetch_consolidated_data():
         return []
 
     try:
-        # Fetch artists
-        artists_res = supabase.table("artists").select("name, is_core, genre_tags, status, priority_level").neq("status", "blocked").execute()
+        # Fetch artists - restrict to verified, verified_auto or core bands
+        # This ensures 'pending' artists (that haven't been processed by scout.py yet) don't show up if they should be blocked
+        artists_res = (supabase.table("artists")
+                       .select("name, is_core, genre_tags, status, priority_level")
+                       .neq("status", "blocked")
+                       .or_("status.in.(verified,verified_auto),is_core.eq.true")
+                       .execute())
         artists_df = pd.DataFrame(artists_res.data)
 
         # Fetch events
