@@ -474,6 +474,78 @@ def remove_past_events():
     except Exception as e:
         print(f"  Error removing past events: {e}")
 
+def cleanup_blocked_artists():
+    """
+    Maintenance: Scans artists and blocks those with blacklisted keywords in tags.
+    Ensures consistency with the Genre Guardian system.
+    """
+    if not supabase:
+        return
+
+    print("--- Running Blocked Artists Cleanup ---")
+    try:
+        # Fetch all artists that are not already blocked
+        all_artists = []
+        page_size = 1000
+        start = 0
+        while True:
+            response = supabase.table("artists").select("id, name, genre_tags, status, is_core").neq("status", "blocked").range(start, start + page_size - 1).execute()
+            all_artists.extend(response.data)
+            if len(response.data) < page_size:
+                break
+            start += page_size
+
+        blocked_count = 0
+        for artist in all_artists:
+            tags = artist.get('genre_tags')
+            if not tags:
+                continue
+
+            if isinstance(tags, str):
+                try:
+                    tags = json.loads(tags)
+                except:
+                    tags = [tags]
+
+            if not isinstance(tags, list):
+                continue
+
+            # Core artists are immune unless manually changed, but we still check for consistency
+            if artist.get('is_core'):
+                continue
+
+            top_5 = tags[:5]
+            should_block = False
+            reason = ""
+
+            # 1. Immediate Death Rule (with word boundaries)
+            for t in top_5:
+                t_normalized = f" {t.lower().replace('-', ' ')} "
+                for dk in IMMEDIATE_DEATH_KEYWORDS:
+                    if f" {dk} " in t_normalized or dk == t.lower():
+                        should_block = True
+                        reason = f"Immediate Death: {dk}"
+                        break
+                if should_block: break
+
+            # 2. Ratio Rule
+            if not should_block:
+                punk_count = sum(1 for t in top_5 if any(pk in t.lower() for pk in PUNK_KEYWORDS))
+                blacklist_count = sum(1 for t in top_5 if any(bk in t.lower() for bk in BLACK_LIST_KEYWORDS))
+                if blacklist_count > punk_count:
+                    should_block = True
+                    reason = f"Ratio Rule (B:{blacklist_count} > P:{punk_count})"
+
+            if should_block:
+                print(f"  Blocking {artist['name']}: {reason}")
+                supabase.table("artists").update({"status": "blocked"}).eq("id", artist['id']).execute()
+                blocked_count += 1
+
+        print(f"  Cleanup finished. Blocked {blocked_count} artists.")
+
+    except Exception as e:
+        print(f"  Error during cleanup: {e}")
+
 def upsert_events(events, is_recommendation):
     if not supabase or not events:
         return 0
@@ -608,9 +680,10 @@ def check_similarity_anchor(artist_name):
 def main():
     print("Starting PUNK-SCOUT City-Scraper Engine...")
 
-    # 0. Maintenance: Fetch dynamic keywords and remove past events
+    # 0. Maintenance: Fetch dynamic keywords, remove past events, and cleanup artists
     fetch_keywords()
     remove_past_events()
+    cleanup_blocked_artists()
 
     # 1. Update Linktrees for High Priority Artists (Keep this logic)
     core_artists = get_core_artists()
