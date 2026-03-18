@@ -153,9 +153,19 @@ def get_supabase_client():
 
 supabase = get_supabase_client()
 
-PUNK_KEYWORDS = {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
+@st.cache_data(ttl=3600)
+def fetch_punk_keywords():
+    if not supabase:
+        return {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
+    try:
+        res = supabase.table("keywords").select("word").eq("category", "punk").execute()
+        if res.data:
+            return {k['word'] for k in res.data}
+    except Exception as e:
+        print(f"Error fetching punk keywords: {e}")
+    return {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
 
-def calculate_punk_score(tags):
+def calculate_punk_score(tags, punk_keywords):
     if not tags: return 0
     if isinstance(tags, str):
         try:
@@ -165,7 +175,7 @@ def calculate_punk_score(tags):
 
     if not isinstance(tags, list): return 0
 
-    punk_count = sum(1 for t in tags if any(pk in str(t).lower() for pk in PUNK_KEYWORDS))
+    punk_count = sum(1 for t in tags if any(pk in str(t).lower() for pk in punk_keywords))
     # Score based on top 5 tags primarily
     score = int((punk_count / min(len(tags), 5)) * 100)
     return min(score, 100)
@@ -196,8 +206,11 @@ def fetch_consolidated_data():
         # Merge
         df = pd.merge(events_df, artists_df, left_on='artist', right_on='name', how='inner', suffixes=('', '_art'))
 
+        # Fetch punk keywords for scoring
+        punk_keywords = fetch_punk_keywords()
+
         # Calculate punk score
-        df['punk_score'] = df['genre_tags'].apply(calculate_punk_score)
+        df['punk_score'] = df['genre_tags'].apply(lambda x: calculate_punk_score(x, punk_keywords))
 
         # Format genre tags for JS
         df['genre_tags'] = df['genre_tags'].apply(lambda x: x if isinstance(x, list) else [])
