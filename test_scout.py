@@ -143,6 +143,11 @@ class TestScout(unittest.TestCase):
 
     @patch('scout.get_artist_tags')
     def test_passes_tag_filter(self, mock_tags):
+        # Seed keywords for test
+        scout.PUNK_KEYWORDS = {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
+        scout.BLACK_LIST_KEYWORDS = {'pop', 'latin', 'reggaeton', 'ballad', 'romantico'}
+        scout.IMMEDIATE_DEATH_KEYWORDS = {'infantil', 'kids', 'techno', 'electronic'}
+
         # Case 1: More Punk than Blacklist
         mock_tags.return_value = ['punk', 'hardcore', 'rock', 'alternative', 'indie', 'pop']
         passed, tags = scout.passes_tag_filter("Good Band")

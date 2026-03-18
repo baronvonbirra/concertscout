@@ -49,14 +49,37 @@ summary = {
     "events_upserted": 0
 }
 
-PUNK_KEYWORDS = {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
-BLACK_LIST_KEYWORDS = {'pop', 'latin', 'reggaeton', 'ballad', 'romantico'}
-IMMEDIATE_DEATH_KEYWORDS = {
-    'infantil', 'childrens music', "children's music", 'kids',
-    'soundtrack', 'score', 'classical', 'instrumental',
-    'electronic', 'techno', 'house', 'trance', 'ambient',
-    'hip hop', 'rap', 'trap', 'reggaeton'
-}
+# Dynamic Keywords (will be populated from DB)
+PUNK_KEYWORDS = set()
+BLACK_LIST_KEYWORDS = set()
+IMMEDIATE_DEATH_KEYWORDS = set()
+
+def fetch_keywords():
+    global PUNK_KEYWORDS, BLACK_LIST_KEYWORDS, IMMEDIATE_DEATH_KEYWORDS
+    if not supabase:
+        # Fallbacks if supabase not available
+        PUNK_KEYWORDS = {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
+        BLACK_LIST_KEYWORDS = {'pop', 'latin', 'reggaeton', 'ballad', 'romantico'}
+        IMMEDIATE_DEATH_KEYWORDS = {'infantil', 'kids', 'electronic', 'hip hop'}
+        return
+
+    try:
+        response = supabase.table("keywords").select("*").execute()
+        data = response.data
+        if not data:
+            print("Warning: No keywords found in DB.")
+            return
+
+        PUNK_KEYWORDS = {k['word'] for k in data if k['category'] == 'punk'}
+        BLACK_LIST_KEYWORDS = {k['word'] for k in data if k['category'] == 'blacklist'}
+        IMMEDIATE_DEATH_KEYWORDS = {k['word'] for k in data if k['category'] == 'death'}
+        print(f"Loaded {len(data)} keywords from DB (Punk: {len(PUNK_KEYWORDS)}, Blacklist: {len(BLACK_LIST_KEYWORDS)}, Death: {len(IMMEDIATE_DEATH_KEYWORDS)})")
+    except Exception as e:
+        print(f"Error fetching keywords from DB: {e}")
+        # Fallbacks
+        PUNK_KEYWORDS = {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
+        BLACK_LIST_KEYWORDS = {'pop', 'latin', 'reggaeton', 'ballad', 'romantico'}
+        IMMEDIATE_DEATH_KEYWORDS = {'infantil', 'kids', 'electronic', 'hip hop'}
 
 def get_core_artists():
     if not supabase:
@@ -414,8 +437,7 @@ def get_similar_punk_artists(artist_id, artist_name):
             tags_data = tags_response.json()
             tags = [t['name'].lower() for t in tags_data.get('toptags', {}).get('tag', [])]
 
-            punk_keywords = ['punk', 'hardcore', 'crust', 'post-punk', 'ska']
-            is_punk = any(keyword in ' '.join(tags) for keyword in punk_keywords)
+            is_punk = any(keyword in ' '.join(tags) for keyword in PUNK_KEYWORDS)
 
             if is_punk:
                 print(f"  [PASSED] {sa} (Tags: {', '.join(tags[:5])}...)")
@@ -586,7 +608,8 @@ def check_similarity_anchor(artist_name):
 def main():
     print("Starting PUNK-SCOUT City-Scraper Engine...")
 
-    # 0. Maintenance: Remove past events
+    # 0. Maintenance: Fetch dynamic keywords and remove past events
+    fetch_keywords()
     remove_past_events()
 
     # 1. Update Linktrees for High Priority Artists (Keep this logic)
