@@ -18,7 +18,7 @@ def generate():
     # Define minimal requirements for the app.py to run in stlite
     # Note: 'streamlit' is built into stlite. 'requests' is not needed by app.py.
     # Pinning supabase and httpx to ensure stability in stlite/pyodide environment.
-    requirements = ['supabase==2.4.5', 'httpx==0.27.2', 'pyodide-http', 'python-dotenv', 'pandas']
+    requirements = ['supabase==2.4.5', 'httpx==0.27.2', 'pyodide-http', 'python-dotenv']
 
     # IMPORTANT: GitHub Pages is a public hosting service.
     # The following credentials will be visible to any user who visits the site.
@@ -42,7 +42,7 @@ def generate():
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1, shrink-to-fit=no"
+      content="width=device-width, initial-scale=1.0"
     />
     <title>PUNK-SCOUT V2.0</title>
     <link rel="icon" href="favicon.png" type="image/png" />
@@ -50,6 +50,15 @@ def generate():
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.63.1/build/stlite.css"
     />
+    <style>
+      html, body, #root {{
+        height: 100vh;
+        width: 100vw;
+        margin: 0;
+        padding: 0;
+        overflow-x: hidden;
+      }}
+    </style>
   </head>
   <body>
     <div id="root"></div>

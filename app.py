@@ -130,7 +130,6 @@ httpx.AsyncClient.__init__ = _patched_async_client_init
 
 # 4. STANDARD IMPORTS
 import streamlit as st
-import pandas as pd
 import textwrap
 import os
 import json
@@ -186,48 +185,68 @@ def fetch_consolidated_data():
 
     try:
         # Fetch artists - restrict to verified, verified_auto or core bands
-        # This ensures 'pending' artists (that haven't been processed by scout.py yet) don't show up if they should be blocked
         artists_res = (supabase.table("artists")
                        .select("name, is_core, genre_tags, status, priority_level")
                        .neq("status", "blocked")
                        .or_("status.in.(verified,verified_auto),is_core.eq.true")
                        .execute())
-        artists_df = pd.DataFrame(artists_res.data)
+        artists_list = artists_res.data if artists_res.data else []
+
+        # Create a mapping for quick lookup
+        artists_map = {a['name']: a for a in artists_list}
 
         # Fetch events
         events_res = supabase.table("events").select("*").execute()
-        events_df = pd.DataFrame(events_res.data)
+        events_list = events_res.data if events_res.data else []
 
-        if events_df.empty:
+        if not events_list:
             return []
-
-        if artists_df.empty:
-            # Should not happen if there are events, but safety first
-            events_df['is_core'] = False
-            events_df['punk_score'] = 0
-            events_df['genre_tags'] = "[]"
-            return events_df.to_dict('records')
-
-        # Merge
-        df = pd.merge(events_df, artists_df, left_on='artist', right_on='name', how='inner', suffixes=('', '_art'))
 
         # Fetch punk keywords for scoring
         punk_keywords = fetch_punk_keywords()
 
-        # Calculate punk score
-        df['punk_score'] = df['genre_tags'].apply(lambda x: calculate_punk_score(x, punk_keywords))
+        consolidated = []
+        for event in events_list:
+            artist_name = event.get('artist')
+            artist_info = artists_map.get(artist_name)
 
-        # Format genre tags for JS
-        df['genre_tags'] = df['genre_tags'].apply(lambda x: x if isinstance(x, list) else [])
+            if artist_info:
+                # Merge event and artist data
+                merged = {**event}
+                merged['is_core'] = artist_info.get('is_core', False)
+                tags = artist_info.get('genre_tags', [])
+                if isinstance(tags, str):
+                    try:
+                        tags = json.loads(tags)
+                    except:
+                        tags = []
+                merged['genre_tags'] = tags if isinstance(tags, list) else []
+                merged['punk_score'] = calculate_punk_score(merged['genre_tags'], punk_keywords)
+                consolidated.append(merged)
 
-        return df.to_dict('records')
+        return consolidated
     except Exception as e:
         st.error(f"Error fetching data: {e}")
         return []
 
 def main():
+    # Inject CSS to hide Streamlit elements and remove padding for mobile visibility
+    st.markdown("""
+        <style>
+            #MainMenu {visibility: hidden;}
+            header {visibility: hidden;}
+            footer {visibility: hidden;}
+            .block-container {
+                padding-top: 0rem;
+                padding-bottom: 0rem;
+                padding-left: 0rem;
+                padding-right: 0rem;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
     data = fetch_consolidated_data()
-    events_json = json.dumps(data)
+    events_json = json.dumps(data).replace("</script>", "<\\/script>")
 
     # NEO-BRUTALIST FRONTEND TEMPLATE
     html_template = textwrap.dedent("""\
@@ -381,7 +400,7 @@ def main():
     </body>
     </html>
     """).strip()
-    st.components.v1.html(html_template.replace("__CONCERT_DATA__", events_json), height=1200, scrolling=True)
+    st.components.v1.html(html_template.replace("__CONCERT_DATA__", events_json), height=2500, scrolling=True)
 
 if __name__ == "__main__":
     main()
