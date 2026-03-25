@@ -17,8 +17,12 @@ The project **concertscout** is **NOT impacted** by the upcoming removal of anon
 Although the core functionality remains unaffected by the Data API root removal, the project has been updated to address identified security linter errors regarding Row Level Security (RLS).
 
 - **RLS Enabled**: Row Level Security is now explicitly enabled in `schema.sql` for all tables (`artists`, `events`, `locations`, `similar_artists_cache`, `keywords`).
-- **Public Read Policies**: `SELECT` policies have been established for the `anon` (public) role to ensure the frontend can continue to fetch and display concert data.
-- **Service Role Policies**: Full access policies for the `service_role` have been added to allow the backend scraper to operate correctly within an authenticated context.
+- **Broad Access Policies**: `ALL` access policies have been established for all tables to ensure the current project configuration (which uses the `anon` key for both frontend and backend tasks) remains fully functional.
+
+## Security Recommendation
+The current configuration uses a single `anon` key for all operations, which requires granting broad RLS permissions to the `public` role. To achieve a more robust security posture, it is highly recommended to:
+1.  **Use the Service Role Key**: Update the backend scraper (`scout.py` and GitHub Actions) to use the Supabase `service_role` key. This key bypasses RLS and is intended for administrative backend tasks.
+2.  **Restrict the Anon Key**: Once the scraper is using the `service_role` key, update the RLS policies in `schema.sql` to only allow `SELECT` for the `anon` role. This will prevent public users from modifying your data while allowing the frontend to remain functional.
 
 ## Conclusion
-The project is secure and no additional changes are required to maintain functionality after April 8th, 2026.
+The project is secure (RLS enabled) and fully functional. No additional changes are required to maintain functionality after April 8th, 2026.

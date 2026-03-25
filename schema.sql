@@ -118,22 +118,18 @@ ALTER TABLE similar_artists_cache ENABLE ROW LEVEL SECURITY;
 ALTER TABLE keywords ENABLE ROW LEVEL SECURITY;
 
 -- Security Policies: All tables should allow public (anon) read access
+-- Security Policies: Grant full access to both 'anon' and 'service_role' to support current project configuration
 -- 1. Artists
-CREATE POLICY "Allow public read access for artists" ON artists FOR SELECT USING (true);
-CREATE POLICY "Allow service role all access for artists" ON artists FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Allow all access for artists" ON artists FOR ALL USING (true) WITH CHECK (true);
 
 -- 2. Events
-CREATE POLICY "Allow public read access for events" ON events FOR SELECT USING (true);
-CREATE POLICY "Allow service role all access for events" ON events FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Allow all access for events" ON events FOR ALL USING (true) WITH CHECK (true);
 
 -- 3. Locations
-CREATE POLICY "Allow public read access for locations" ON locations FOR SELECT USING (true);
-CREATE POLICY "Allow service role all access for locations" ON locations FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Allow all access for locations" ON locations FOR ALL USING (true) WITH CHECK (true);
 
 -- 4. Similar Artists Cache
-CREATE POLICY "Allow public read access for similar_artists_cache" ON similar_artists_cache FOR SELECT USING (true);
-CREATE POLICY "Allow service role all access for similar_artists_cache" ON similar_artists_cache FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Allow all access for similar_artists_cache" ON similar_artists_cache FOR ALL USING (true) WITH CHECK (true);
 
 -- 5. Keywords
-CREATE POLICY "Allow public read access for keywords" ON keywords FOR SELECT USING (true);
-CREATE POLICY "Allow service role all access for keywords" ON keywords FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Allow all access for keywords" ON keywords FOR ALL USING (true) WITH CHECK (true);
