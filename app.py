@@ -302,14 +302,30 @@ def main():
             city: 'All',
             discovery: false,
             events: window.concertData,
+            isNew(createdAt) {
+                if (!createdAt) return false;
+                const created = new Date(createdAt);
+                const now = new Date();
+                const diff = (now - created) / (1000 * 60 * 60); // hours
+                return diff <= 72;
+            },
             get filteredEvents() {
-                return this.events.filter(e => {
-                    const matchSearch = e.artist.toLowerCase().includes(this.search.toLowerCase()) ||
-                                        e.venue.toLowerCase().includes(this.search.toLowerCase());
-                    const matchCity = this.city === 'All' || e.city === this.city;
-                    const matchDiscovery = this.discovery ? e.is_recommendation : !e.is_recommendation;
-                    return matchSearch && matchCity && matchDiscovery;
-                });
+                return this.events
+                    .filter(e => {
+                        const matchSearch = e.artist.toLowerCase().includes(this.search.toLowerCase()) ||
+                                            e.venue.toLowerCase().includes(this.search.toLowerCase());
+                        const matchCity = this.city === 'All' || e.city === this.city;
+                        const matchDiscovery = this.discovery ? e.is_recommendation : !e.is_recommendation;
+                        return matchSearch && matchCity && matchDiscovery;
+                    })
+                    .sort((a, b) => {
+                        const newA = this.isNew(a.created_at);
+                        const newB = this.isNew(b.created_at);
+                        if (newA && !newB) return -1;
+                        if (!newA && newB) return 1;
+                        // Both are same "newness", sort by concert date
+                        return new Date(a.date) - new Date(b.date);
+                    });
             },
             get cities() {
                 return ['All', ...new Set(this.events.map(e => e.city))].sort();
@@ -344,11 +360,19 @@ def main():
             <!-- Grid -->
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                 <template x-for="event in filteredEvents" :key="event.id">
-                    <div class="brutal-card p-6 flex flex-col justify-between" :class="event.is_core ? 'safety-orange' : (event.is_recommendation ? 'border-dashed' : '')">
+                    <div class="brutal-card p-6 flex flex-col justify-between"
+                         :class="{
+                            'safety-orange': event.is_core,
+                            'border-dashed': event.is_recommendation,
+                            '!border-[#CCFF00] !border-8': isNew(event.created_at)
+                         }">
                         <div>
                             <div class="flex justify-between items-start mb-4">
-                                <span x-show="event.is_recommendation" class="bg-black text-white px-2 py-1 text-xs mono" x-text="'SCORE: ' + event.punk_score + '%'"></span>
-                                <span x-show="event.is_core" class="bg-[#FF5733] text-white px-2 py-1 text-xs mono">CORE</span>
+                                <div class="flex gap-2">
+                                    <span x-show="isNew(event.created_at)" class="bg-[#CCFF00] text-black px-2 py-1 text-xs mono font-bold">NEW</span>
+                                    <span x-show="event.is_recommendation" class="bg-black text-white px-2 py-1 text-xs mono" x-text="'SCORE: ' + event.punk_score + '%'"></span>
+                                    <span x-show="event.is_core" class="bg-[#FF5733] text-white px-2 py-1 text-xs mono">CORE</span>
+                                </div>
 
                                 <!-- Andalusia Map Mini-Thumb -->
                                 <div class="w-12 h-12 relative">
