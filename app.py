@@ -323,7 +323,7 @@ def main():
                         const newB = this.isNew(b.created_at);
                         if (newA && !newB) return -1;
                         if (!newA && newB) return 1;
-                        // Both are same "newness", sort by concert date
+                        // Both are same newness, sort by concert date
                         return new Date(a.date) - new Date(b.date);
                     });
             },
