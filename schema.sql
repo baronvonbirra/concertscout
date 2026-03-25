@@ -109,3 +109,31 @@ CREATE TRIGGER artist_tags_validation
 BEFORE INSERT OR UPDATE ON artists
 FOR EACH ROW
 EXECUTE FUNCTION validate_artist_tags();
+
+-- Enable RLS on all project tables
+ALTER TABLE artists ENABLE ROW LEVEL SECURITY;
+ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE locations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE similar_artists_cache ENABLE ROW LEVEL SECURITY;
+ALTER TABLE keywords ENABLE ROW LEVEL SECURITY;
+
+-- Security Policies: All tables should allow public (anon) read access
+-- 1. Artists
+CREATE POLICY "Allow public read access for artists" ON artists FOR SELECT USING (true);
+CREATE POLICY "Allow service role all access for artists" ON artists FOR ALL USING (auth.role() = 'service_role');
+
+-- 2. Events
+CREATE POLICY "Allow public read access for events" ON events FOR SELECT USING (true);
+CREATE POLICY "Allow service role all access for events" ON events FOR ALL USING (auth.role() = 'service_role');
+
+-- 3. Locations
+CREATE POLICY "Allow public read access for locations" ON locations FOR SELECT USING (true);
+CREATE POLICY "Allow service role all access for locations" ON locations FOR ALL USING (auth.role() = 'service_role');
+
+-- 4. Similar Artists Cache
+CREATE POLICY "Allow public read access for similar_artists_cache" ON similar_artists_cache FOR SELECT USING (true);
+CREATE POLICY "Allow service role all access for similar_artists_cache" ON similar_artists_cache FOR ALL USING (auth.role() = 'service_role');
+
+-- 5. Keywords
+CREATE POLICY "Allow public read access for keywords" ON keywords FOR SELECT USING (true);
+CREATE POLICY "Allow service role all access for keywords" ON keywords FOR ALL USING (auth.role() = 'service_role');

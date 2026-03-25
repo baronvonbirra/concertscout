@@ -13,5 +13,12 @@ The project **concertscout** is **NOT impacted** by the upcoming removal of anon
 - Code audit completed for `app.py`, `scout.py`, and `generate_static.py`.
 - Test suite (`test_scout.py`) executed successfully, confirming that the current client-based interaction model is functional and stable.
 
+## Security Hardening (Addressing Linter Errors)
+Although the core functionality remains unaffected by the Data API root removal, the project has been updated to address identified security linter errors regarding Row Level Security (RLS).
+
+- **RLS Enabled**: Row Level Security is now explicitly enabled in `schema.sql` for all tables (`artists`, `events`, `locations`, `similar_artists_cache`, `keywords`).
+- **Public Read Policies**: `SELECT` policies have been established for the `anon` (public) role to ensure the frontend can continue to fetch and display concert data.
+- **Service Role Policies**: Full access policies for the `service_role` have been added to allow the backend scraper to operate correctly within an authenticated context.
+
 ## Conclusion
-No changes are required to the codebase or project configuration to maintain functionality after April 8th, 2026.
+The project is secure and no additional changes are required to maintain functionality after April 8th, 2026.
