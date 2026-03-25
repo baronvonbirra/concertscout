@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS events (
     is_proximity BOOLEAN DEFAULT false,
     priority TEXT,
     discovery_source TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE(artist, city, date)
 );
 
