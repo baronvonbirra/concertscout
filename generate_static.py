@@ -48,11 +48,11 @@ def generate():
     <link rel="icon" href="favicon.png" type="image/png" />
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.63.1/build/stlite.css"
+      href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.4.0/build/style.css"
     />
     <style>
       html, body, #root {{
-        height: 100vh;
+        height: 100dvh;
         width: 100vw;
         margin: 0;
         padding: 0;
@@ -62,9 +62,9 @@ def generate():
   </head>
   <body>
     <div id="root"></div>
-    <script src="https://cdn.jsdelivr.net/npm/@stlite/mountable@0.63.1/build/stlite.js"></script>
-    <script>
-      stlite.mount(
+    <script type="module">
+      import {{ mount }} from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.4.0/build/stlite.js";
+      mount(
         {{
           requirements: {requirements},
           entrypoint: "app.py",
