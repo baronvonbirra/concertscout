@@ -424,7 +424,7 @@ def main():
     </body>
     </html>
     """).strip()
-    st.components.v1.html(html_template.replace("__CONCERT_DATA__", events_json), height=2500, scrolling=True)
+    st.components.v1.html(html_template.replace("__CONCERT_DATA__", events_json), height=1600, scrolling=False)
 
 if __name__ == "__main__":
     main()
