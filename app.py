@@ -242,6 +242,9 @@ def main():
                 padding-left: 0rem;
                 padding-right: 0rem;
             }
+            iframe {
+                height: 100dvh !important;
+            }
         </style>
     """, unsafe_allow_html=True)
 
@@ -301,6 +304,7 @@ def main():
             search: '',
             city: 'All',
             discovery: false,
+            showTop: false,
             events: window.concertData,
             isNew(createdAt) {
                 if (!createdAt) return false;
@@ -330,7 +334,19 @@ def main():
             get cities() {
                 return ['All', ...new Set(this.events.map(e => e.city))].sort();
             }
-        }" class="p-4 md:p-8">
+        }"
+        @scroll.window="showTop = (window.pageYOffset > 500)"
+        class="p-4 md:p-8">
+
+            <!-- Go Up Button -->
+            <button x-show="showTop"
+                    @click="window.scrollTo({top: 0, behavior: 'smooth'})"
+                    x-transition
+                    class="fixed bottom-8 right-8 z-50 bg-[#CCFF00] text-black border-4 border-black p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                </svg>
+            </button>
 
             <!-- Header & Search -->
             <div class="mb-12">
@@ -424,7 +440,7 @@ def main():
     </body>
     </html>
     """).strip()
-    st.components.v1.html(html_template.replace("__CONCERT_DATA__", events_json), height=1600, scrolling=False)
+    st.components.v1.html(html_template.replace("__CONCERT_DATA__", events_json), height=1000, scrolling=True)
 
 if __name__ == "__main__":
     main()
