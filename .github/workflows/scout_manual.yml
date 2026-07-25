@@ -1,9 +1,12 @@
-name: Wednesday Weekly Punk Ingestion (Scout v2.0)
+name: On-Demand Playlist Ingestion (Scout v2.0)
 
 on:
-  schedule:
-    - cron: '0 3 * * 3'  # Scheduled CRON every Wednesday at 03:00 UTC
-  workflow_dispatch:      # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      playlist_url:
+        description: 'Spotify Playlist URL or URI'
+        required: true
+        default: 'https://open.spotify.com/playlist/4AGyN4LWzSqQXK1laupEaI'
 
 jobs:
   scout:
@@ -22,11 +25,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Weekly Scout Ingestion
+      - name: Run On-Demand Ingestion
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
-        run: python scout.py --weekly
+        run: python scout.py --playlist "${{ github.event.inputs.playlist_url }}"

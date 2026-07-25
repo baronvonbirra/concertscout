@@ -2,208 +2,86 @@ import unittest
 from unittest.mock import patch, MagicMock
 import scout
 import json
-from bs4 import BeautifulSoup
 
-class TestScout(unittest.TestCase):
+class TestScoutV2(unittest.TestCase):
+
+    @patch('scout.requests.post')
+    def test_get_spotify_token(self, mock_post):
+        mock_res = MagicMock()
+        mock_res.json.return_value = {
+            "access_token": "mock_token",
+            "expires_in": 3600
+        }
+        mock_post.return_value = mock_res
+
+        # Reset cache
+        scout._spotify_token_cache = {"token": None, "expires_at": 0}
+
+        with patch('scout.SPOTIFY_CLIENT_ID', 'test_id'), patch('scout.SPOTIFY_CLIENT_SECRET', 'test_secret'):
+            token = scout.get_spotify_token()
+
+        self.assertEqual(token, "mock_token")
+
+    def test_extract_playlist_id(self):
+        url = "https://open.spotify.com/playlist/4AGyN4LWzSqQXK1laupEaI?si=abc"
+        self.assertEqual(scout.extract_playlist_id(url), "4AGyN4LWzSqQXK1laupEaI")
+
+        uri = "spotify:playlist:4AGyN4LWzSqQXK1laupEaI"
+        self.assertEqual(scout.extract_playlist_id(uri), "4AGyN4LWzSqQXK1laupEaI")
+
+    @patch('scout.requests.post')
+    def test_resolve_instagram_via_search(self, mock_post):
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.text = """
+        <html>
+            <a href="https://www.instagram.com/hawxxmusic/reels/">Instagram</a>
+        </html>
+        """
+        mock_post.return_value = mock_res
+
+        url = scout.resolve_instagram_via_search("HAWXX")
+        self.assertEqual(url, "https://www.instagram.com/hawxxmusic/")
 
     @patch('scout.requests.get')
-    def test_fetch_bandsintown_events(self, mock_get):
-        # Mock Bandsintown response
-        mock_response = MagicMock()
-        mock_response.json.return_value = [
-            {
-                "venue": {"country": "Spain", "city": "Madrid", "name": "Wizink Center"},
-                "datetime": "2023-12-01T20:00:00",
-                "url": "http://tickets.com"
-            },
-            {
-                "venue": {"country": "France", "city": "Biarritz", "name": "Atabal"},
-                "datetime": "2023-12-02T20:00:00",
-                "url": "http://tickets.fr"
-            },
-            {
-                "venue": {"country": "UK", "city": "London", "name": "Brixton Academy"},
-                "datetime": "2023-12-03T20:00:00",
-                "url": "http://tickets.uk"
-            }
-        ]
-        mock_get.return_value = mock_response
+    def test_scrape_lastfm_artist_events(self, mock_get):
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.text = """
+        <html>
+            <div class="events-list-item">
+                <a href="/event/12345">Gira 2026</a>
+                <time datetime="2026-10-15T20:00:00"></time>
+                <span class="venue-location">Wurlitzer Ballroom, Madrid, Spain</span>
+            </div>
+        </html>
+        """
+        mock_get.return_value = mock_res
 
-        with patch('scout.BANDSINTOWN_APP_ID', 'test_id'):
-            events = scout.fetch_bandsintown_events("Bad Religion")
-
-        self.assertEqual(len(events), 2) # Madrid (Spain) and Biarritz (Proximity)
-        self.assertEqual(events[0]['city'], "Madrid")
-        self.assertFalse(events[0]['is_proximity'])
-        self.assertEqual(events[1]['city'], "Biarritz")
-        self.assertTrue(events[1]['is_proximity'])
-
-    @patch('scout.fetch_bandsintown_events')
-    def test_fetch_all_sources(self, mock_bit):
-        mock_bit.return_value = [
-            {"artist": "NOFX", "city": "Madrid", "date": "2023-12-10", "source": "Bandsintown"}
-        ]
-
-        events = scout.fetch_all_sources("NOFX")
+        events = scout.scrape_lastfm_artist_events("HAWXX")
         self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]['city'], "Madrid")
+        self.assertEqual(events[0]["event_name"], "Gira 2026")
+        self.assertEqual(events[0]["city"], "Madrid")
+        self.assertEqual(events[0]["venue"], "Wurlitzer Ballroom")
+        self.assertEqual(events[0]["event_date"], "2026-10-15")
 
-    @patch('scout.requests.get')
-    @patch('scout.supabase')
-    def test_linktree_sniffer_change(self, mock_supabase, mock_get):
-        artist = {
-            "id": 1, "name": "Refused", "priority_level": "high",
-            "linktree_url": "https://linktr.ee/refused", "last_linktree_snapshot": '["Old Link"]'
-        }
-
-        mock_response = MagicMock()
-        mock_response.text = '<html><a data-testid="LinkButton">New Link</a></html>'
-        mock_get.return_value = mock_response
-
-        # Mock time.sleep to speed up tests
-        with patch('scout.time.sleep'):
-            scout.linktree_sniffer(artist)
-
-        mock_supabase.table().update.assert_called()
-        call_args = mock_supabase.table().update.call_args[0][0]
-        self.assertIn("New Link", call_args['last_linktree_snapshot'])
-
-    @patch('scout.requests.get')
-    @patch('scout.supabase')
-    @patch('scout.LASTFM_API_KEY', 'test_key')
-    def test_get_similar_punk_artists_cache(self, mock_supabase, mock_get):
-        # Mock cached data
-        mock_supabase.table().select().eq().gt().execute.return_value = MagicMock(data=[
-            {"similar_artist_name": "Pennywise"}
-        ])
-
-        similar = scout.get_similar_punk_artists(1, "Bad Religion")
-        self.assertEqual(similar, ["Pennywise"])
-        mock_get.assert_not_called()
-
-    @patch('scout.requests.get')
-    @patch('scout.time.sleep')
-    def test_scrape_songkick_city_pagination(self, mock_sleep, mock_get):
-        # Mocking 2 pages of results
-        # Page 1 has 1 event with 2 artists in 2026
-        # Page 2 has 1 event in 2026 and 1 in 2027
-
-        html_page1 = """
-        <html>
-            <li class="event-listings-element">
-                <p class="artists"><strong>Artist 1</strong><strong>Artist 2</strong></p>
-                <time datetime="2026-05-01T20:00:00"></time>
-                <p class="location">
-                    <a class="venue-link">Venue 1</a>, City 1, Country 1
-                </p>
-                <a class="event-link" href="/concerts/1"></a>
-            </li>
-        </html>
+    @patch('scout.requests.post')
+    def test_check_instagram_tour_keywords(self, mock_post):
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.text = """
+        <table>
+            <tr>
+                <td class="result-snippet">HAWXX touring in Spain! Madrid show announced.</td>
+            </tr>
+        </table>
         """
+        mock_post.return_value = mock_res
 
-        html_page2 = """
-        <html>
-            <li class="event-listings-element">
-                <p class="artists"><strong>Artist 3</strong></p>
-                <time datetime="2026-12-31T20:00:00"></time>
-                <p class="location">
-                    <a class="venue-link">Venue 3</a>, City 3, Country 3
-                </p>
-                <a class="event-link" href="/concerts/3"></a>
-            </li>
-            <li class="event-listings-element">
-                <p class="artists"><strong>Artist 4</strong></p>
-                <time datetime="2027-01-01T20:00:00"></time>
-                <p class="location">
-                    <a class="venue-link">Venue 4</a>, City 4, Country 4
-                </p>
-                <a class="event-link" href="/concerts/4"></a>
-            </li>
-        </html>
-        """
-
-        mock_resp1 = MagicMock()
-        mock_resp1.text = html_page1
-        mock_resp1.status_code = 200
-
-        mock_resp2 = MagicMock()
-        mock_resp2.text = html_page2
-        mock_resp2.status_code = 200
-
-        mock_get.side_effect = [mock_resp1, mock_resp2]
-
-        events = scout.scrape_songkick_city("123", "Spain", "Madrid")
-
-        # Should have 3 events (2 from page 1 (multiple artists), 1 from page 2 before hitting 2027)
-        self.assertEqual(len(events), 3)
-        self.assertEqual(events[0]['artist'], "Artist 1")
-        self.assertEqual(events[1]['artist'], "Artist 2")
-        self.assertEqual(events[2]['artist'], "Artist 3")
-        self.assertEqual(mock_get.call_count, 2)
-
-    @patch('scout.get_artist_tags')
-    def test_passes_tag_filter(self, mock_tags):
-        # Seed keywords for test
-        scout.PUNK_KEYWORDS = {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
-        scout.BLACK_LIST_KEYWORDS = {'pop', 'latin', 'reggaeton', 'ballad', 'romantico'}
-        scout.IMMEDIATE_DEATH_KEYWORDS = {'infantil', 'kids', 'techno', 'electronic'}
-
-        # Case 1: More Punk than Blacklist
-        mock_tags.return_value = ['punk', 'hardcore', 'rock', 'alternative', 'indie', 'pop']
-        passed, tags = scout.passes_tag_filter("Good Band")
-        self.assertTrue(passed)
-
-        # Case 1.5: Ska is qualifying
-        mock_tags.return_value = ['ska', 'punk', 'rock', 'alternative', 'indie']
-        passed, tags = scout.passes_tag_filter("Ska Band")
-        self.assertTrue(passed)
-
-        # Case 2: More Blacklist than Punk in top 5
-        # Top 5: pop, latin, reggaeton, punk, rock -> 3 blacklist, 1 punk
-        mock_tags.return_value = ['pop', 'latin', 'reggaeton', 'punk', 'rock', 'oi', 'hardcore']
-        passed, tags = scout.passes_tag_filter("Bad Band")
-        self.assertFalse(passed)
-
-        # Case 3: Equal Punk and Blacklist in top 5
-        # Top 5: punk, pop, hardcore, latin, rock -> 2 punk, 2 blacklist
-        mock_tags.return_value = ['punk', 'pop', 'hardcore', 'latin', 'rock']
-        passed, tags = scout.passes_tag_filter("Mid Band")
-        self.assertTrue(passed)
-
-        # Case 4: Immediate Death keyword
-        # Top 5 contains 'techno'
-        mock_tags.return_value = ['punk', 'hardcore', 'techno', 'rock', 'metal']
-        passed, tags = scout.passes_tag_filter("Techno Band")
-        self.assertFalse(passed)
-
-        # Case 5: Immediate Death keyword 'infantil'
-        mock_tags.return_value = ['infantil', 'kids', 'childrens music', 'punk', 'hardcore']
-        passed, tags = scout.passes_tag_filter("Kids Band")
-        self.assertFalse(passed)
-
-    @patch('scout.requests.get')
-    @patch('scout.supabase')
-    @patch('scout.LASTFM_API_KEY', 'test_key')
-    def test_check_similarity_anchor(self, mock_supabase, mock_get):
-        # Mock Last.fm similar artists
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "similarartists": {
-                "artist": [
-                    {"name": "Similar 1"},
-                    {"name": "Similar 2"}
-                ]
-            }
-        }
-        mock_get.return_value = mock_response
-
-        # Case 1: Match in DB
-        mock_supabase.table().select().in_().or_().execute.return_value = MagicMock(data=[{"name": "Similar 1"}])
-        self.assertTrue(scout.check_similarity_anchor("New Artist"))
-
-        # Case 2: No match in DB
-        mock_supabase.table().select().in_().or_().execute.return_value = MagicMock(data=[])
-        self.assertFalse(scout.check_similarity_anchor("Unknown Artist"))
+        flagged, words = scout.check_instagram_tour_keywords("HAWXX", "https://instagram.com/hawxx")
+        self.assertTrue(flagged)
+        self.assertIn("spain", words)
+        self.assertIn("madrid", words)
 
 if __name__ == '__main__':
     unittest.main()

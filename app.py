@@ -138,7 +138,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-st.set_page_config(page_title="PUNK-SCOUT NEO", layout="wide")
+st.set_page_config(page_title="PUNK-SCOUT V2.0", layout="wide")
 
 # Supabase Setup
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -152,77 +152,45 @@ def get_supabase_client():
 
 supabase = get_supabase_client()
 
-@st.cache_data(ttl=3600)
-def fetch_punk_keywords():
-    if not supabase:
-        return {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
-    try:
-        res = supabase.table("keywords").select("word").eq("category", "punk").execute()
-        if res.data:
-            return {k['word'] for k in res.data}
-    except Exception as e:
-        print(f"Error fetching punk keywords: {e}")
-    return {'punk', 'hardcore', 'ska', 'oi', 'grindcore', 'crust'}
-
-def calculate_punk_score(tags, punk_keywords):
-    if not tags: return 0
-    if isinstance(tags, str):
-        try:
-            tags = json.loads(tags)
-        except:
-            tags = [tags]
-
-    if not isinstance(tags, list): return 0
-
-    punk_count = sum(1 for t in tags if any(pk in str(t).lower() for pk in punk_keywords))
-    # Score based on top 5 tags primarily
-    score = int((punk_count / min(len(tags), 5)) * 100)
-    return min(score, 100)
-
 def fetch_consolidated_data():
     if not supabase:
         return []
 
     try:
-        # Fetch artists - restrict to verified, verified_auto or core bands
-        artists_res = (supabase.table("artists")
-                       .select("name, is_core, genre_tags, status, priority_level")
-                       .neq("status", "blocked")
-                       .or_("status.in.(verified,verified_auto),is_core.eq.true")
-                       .execute())
-        artists_list = artists_res.data if artists_res.data else []
-
-        # Create a mapping for quick lookup
-        artists_map = {a['name']: a for a in artists_list}
-
-        # Fetch events
-        events_res = supabase.table("events").select("*").execute()
-        events_list = events_res.data if events_res.data else []
-
-        if not events_list:
-            return []
-
-        # Fetch punk keywords for scoring
-        punk_keywords = fetch_punk_keywords()
+        # Fetch concerts joined with artist details
+        res = supabase.table("concerts").select("*, artists(name, spotify_id, instagram_url, lastfm_url, source_playlist, is_active)").execute()
+        concerts_list = res.data if res.data else []
 
         consolidated = []
-        for event in events_list:
-            artist_name = event.get('artist')
-            artist_info = artists_map.get(artist_name)
+        for concert in concerts_list:
+            artist_data = concert.get("artists")
+            if isinstance(artist_data, list):
+                artist_data = artist_data[0] if len(artist_data) > 0 else None
 
-            if artist_info:
-                # Merge event and artist data
-                merged = {**event}
-                merged['is_core'] = artist_info.get('is_core', False)
-                tags = artist_info.get('genre_tags', [])
-                if isinstance(tags, str):
-                    try:
-                        tags = json.loads(tags)
-                    except:
-                        tags = []
-                merged['genre_tags'] = tags if isinstance(tags, list) else []
-                merged['punk_score'] = calculate_punk_score(merged['genre_tags'], punk_keywords)
-                consolidated.append(merged)
+            if not artist_data:
+                artist_data = {}
+
+            # Skip inactive artists
+            if not artist_data.get("is_active", True):
+                continue
+
+            merged = {**concert}
+            merged["artist"] = artist_data.get("name", "Unknown Artist")
+            merged["spotify_id"] = artist_data.get("spotify_id")
+            merged["instagram_url"] = artist_data.get("instagram_url")
+            merged["lastfm_url"] = artist_data.get("lastfm_url")
+            merged["source_playlist"] = artist_data.get("source_playlist", "Weekly Ingestion")
+
+            # Map event_date to date for frontend compatibility
+            merged["date"] = concert.get("event_date", "Unknown Date")
+
+            # Legacy fields fallbacks
+            merged["genre_tags"] = []
+            merged["punk_score"] = 100
+            merged["is_recommendation"] = False
+            merged["is_core"] = (artist_data.get("source_playlist") != "Weekly Punk")
+
+            consolidated.append(merged)
 
         return consolidated
     except Exception as e:
@@ -319,7 +287,7 @@ def main():
                         const matchSearch = e.artist.toLowerCase().includes(this.search.toLowerCase()) ||
                                             e.venue.toLowerCase().includes(this.search.toLowerCase());
                         const matchCity = this.city === 'All' || e.city === this.city;
-                        const matchDiscovery = this.discovery ? e.is_recommendation : !e.is_recommendation;
+                        const matchDiscovery = this.discovery ? !e.is_core : e.is_core;
                         return matchSearch && matchCity && matchDiscovery;
                     })
                     .sort((a, b) => {
@@ -327,7 +295,6 @@ def main():
                         const newB = this.isNew(b.created_at);
                         if (newA && !newB) return -1;
                         if (!newA && newB) return 1;
-                        // Both are same newness, sort by concert date
                         return new Date(a.date) - new Date(b.date);
                     });
             },
@@ -350,7 +317,7 @@ def main():
 
             <!-- Header & Search -->
             <div class="mb-12">
-                <h1 class="bebas text-5xl md:text-8xl mb-6 tracking-tighter">PUNK-SCOUT <span class="acid-lime">NEO</span></h1>
+                <h1 class="bebas text-5xl md:text-8xl mb-6 tracking-tighter">PUNK-SCOUT <span class="acid-lime">V2.0</span></h1>
 
                 <div class="flex flex-col md:flex-row gap-4 mb-8">
                     <input type="text" x-model="search" placeholder="SEARCH AS YOU TYPE..."
@@ -358,9 +325,9 @@ def main():
 
                     <div class="flex border-4 border-white overflow-hidden">
                         <button @click="discovery = false" :class="!discovery ? 'bg-white text-black' : 'text-white'"
-                                class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all">MY BANDS</button>
+                                class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all">CORE BANDS</button>
                         <button @click="discovery = true" :class="discovery ? 'bg-acid-lime text-black' : 'text-white'"
-                                class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all border-l-4 border-white">NEW DISCOVERIES</button>
+                                class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all border-l-4 border-white">WEEKLY REFRESH</button>
                     </div>
                 </div>
 
@@ -379,15 +346,14 @@ def main():
                     <div class="brutal-card p-6 flex flex-col justify-between"
                          :class="{
                             'safety-orange': event.is_core,
-                            'border-dashed': event.is_recommendation,
                             '!border-[#CCFF00] !border-8': isNew(event.created_at)
                          }">
                         <div>
                             <div class="flex justify-between items-start mb-4">
                                 <div class="flex gap-2">
                                     <span x-show="isNew(event.created_at)" class="bg-[#CCFF00] text-black px-2 py-1 text-xs mono font-bold">NEW</span>
-                                    <span x-show="event.is_recommendation" class="bg-black text-white px-2 py-1 text-xs mono" x-text="'SCORE: ' + event.punk_score + '%'"></span>
                                     <span x-show="event.is_core" class="bg-[#FF5733] text-white px-2 py-1 text-xs mono">CORE</span>
+                                    <span x-show="!event.is_core" class="bg-black text-white px-2 py-1 text-xs mono">WEEKLY</span>
                                 </div>
 
                                 <!-- Andalusia Map Mini-Thumb -->
@@ -413,20 +379,24 @@ def main():
                             </div>
 
                             <div class="bg-black text-white inline-block px-3 py-1 mono text-lg mb-4" x-text="event.date"></div>
-
-                            <template x-if="event.is_recommendation && event.genre_tags && event.genre_tags.length > 0">
-                                <div class="flex flex-wrap gap-1 mt-2">
-                                    <template x-for="tag in event.genre_tags.slice(0,3)" :key="tag">
-                                        <span class="text-[10px] mono border border-black px-1" x-text="tag"></span>
-                                    </template>
-                                </div>
-                            </template>
                         </div>
 
-                        <div class="mt-6 flex justify-between items-center">
-                            <a :href="event.ticket_url || '#'" target="_blank"
-                               class="bg-black text-white px-6 py-2 bebas text-xl hover:bg-acid-lime hover:text-black transition-colors">GET TICKETS</a>
-                            <span class="mono text-[10px] opacity-50" x-text="'ID: ' + event.id"></span>
+                        <div class="mt-6 flex flex-col gap-2">
+                            <div class="flex gap-2 w-full">
+                                <a :href="event.ticket_url || '#'" target="_blank"
+                                   class="bg-black text-white px-4 py-2 bebas text-xl hover:bg-acid-lime hover:text-black transition-colors border-2 border-black flex-1 text-center">GET TICKETS</a>
+
+                                <template x-if="event.spotify_id">
+                                    <a :href="'https://open.spotify.com/artist/' + event.spotify_id" target="_blank"
+                                       class="bg-[#1DB954] text-white px-4 py-2 font-bold hover:bg-white hover:text-black transition-colors border-2 border-black text-center">SPOTIFY</a>
+                                </template>
+
+                                <template x-if="event.instagram_url">
+                                    <a :href="event.instagram_url" target="_blank"
+                                       class="bg-[#E1306C] text-white px-4 py-2 font-bold hover:bg-white hover:text-black transition-colors border-2 border-black text-center">INSTAGRAM</a>
+                                </template>
+                            </div>
+                            <span class="mono text-[10px] opacity-50 self-end" x-text="'ID: ' + event.id"></span>
                         </div>
                     </div>
                 </template>
