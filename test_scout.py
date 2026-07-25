@@ -83,5 +83,24 @@ class TestScoutV2(unittest.TestCase):
         self.assertIn("spain", words)
         self.assertIn("madrid", words)
 
+    @patch('scout.supabase')
+    def test_sweep_past_concerts(self, mock_supabase):
+        mock_delete = MagicMock()
+        mock_lt = MagicMock()
+        mock_execute = MagicMock()
+
+        mock_supabase.table.return_value = mock_delete
+        mock_delete.delete.return_value = mock_lt
+        mock_lt.lt.return_value = mock_execute
+        mock_execute.execute.return_value = MagicMock(data=[{"id": 1}, {"id": 2}])
+
+        # Call function
+        scout.sweep_past_concerts()
+
+        # Assertions
+        mock_supabase.table.assert_called_once_with("concerts")
+        mock_delete.delete.assert_called_once()
+        mock_lt.lt.assert_called_once()
+
 if __name__ == '__main__':
     unittest.main()
