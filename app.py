@@ -152,6 +152,7 @@ def get_supabase_client():
 
 supabase = get_supabase_client()
 
+@st.cache_data(ttl=3600)
 def fetch_consolidated_data():
     if not supabase:
         return []
@@ -198,6 +199,12 @@ def fetch_consolidated_data():
         return []
 
 def main():
+    # Check if we should force refresh
+    if st.query_params.get("refresh") == "true":
+        st.cache_data.clear()
+        st.query_params.pop("refresh", None)
+        st.rerun()
+
     # Inject CSS to hide Streamlit elements and remove padding for mobile visibility
     st.markdown("""
         <style>
@@ -300,6 +307,13 @@ def main():
             },
             get cities() {
                 return ['All', ...new Set(this.events.map(e => e.city))].sort();
+            },
+            forceRefresh() {
+                try {
+                    window.parent.location.search = '?refresh=true';
+                } catch (e) {
+                    window.location.search = '?refresh=true';
+                }
             }
         }"
         @scroll.window="showTop = (window.pageYOffset > 500)"
@@ -321,14 +335,19 @@ def main():
 
                 <div class="flex flex-col md:flex-row gap-4 mb-8">
                     <input type="text" x-model="search" placeholder="SEARCH AS YOU TYPE..."
-                           class="w-full md:w-1/2 bg-white text-black border-4 border-black p-4 text-xl md:text-2xl mono focus:outline-none shadow-[4px_4px_0px_0px_rgba(204,255,0,1)]">
+                           class="w-full md:w-5/12 bg-white text-black border-4 border-black p-4 text-xl md:text-2xl mono focus:outline-none shadow-[4px_4px_0px_0px_rgba(204,255,0,1)]">
 
-                    <div class="flex border-4 border-white overflow-hidden">
+                    <div class="flex border-4 border-white overflow-hidden w-full md:w-5/12">
                         <button @click="discovery = false" :class="!discovery ? 'bg-white text-black' : 'text-white'"
                                 class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all">CORE BANDS</button>
                         <button @click="discovery = true" :class="discovery ? 'bg-acid-lime text-black' : 'text-white'"
                                 class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all border-l-4 border-white">WEEKLY REFRESH</button>
                     </div>
+
+                    <button @click="forceRefresh()"
+                            class="w-full md:w-2/12 bg-acid-lime text-black border-4 border-black p-4 text-xl md:text-2xl bebas hover:translate-x-[-2px] hover:translate-y-[-2px] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all">
+                        REFRESH
+                    </button>
                 </div>
 
                 <!-- City Pills -->

@@ -514,6 +514,19 @@ def scan_instagram_enrichment():
     except Exception as e:
         print(f"Error scanning Instagram enrichment: {e}")
 
+def sweep_past_concerts():
+    if not supabase:
+        print("Warning: Supabase client not initialized. Skipping past concert sweeper.")
+        return
+    print("--- Running Past Concert Sweeper ---")
+    try:
+        today = datetime.now().date().isoformat()
+        res = supabase.table("concerts").delete().lt("event_date", today).execute()
+        deleted_count = len(res.data) if res.data else 0
+        print(f"Successfully deleted {deleted_count} stale concerts older than {today}.")
+    except Exception as e:
+        print(f"Error sweeping past concerts: {e}")
+
 def run_enrichment_pipeline():
     print("--- Running Ingestion/Enrichment Pipeline ---")
     # Resolve Instagram URL for any active artists missing it
@@ -529,6 +542,9 @@ def main():
     parser.add_argument("--weekly", action="store_true", help="Run the Wednesday Automated Ingestion (Module A)")
 
     args = parser.parse_args()
+
+    # Automatically sweep and delete past concerts older than today
+    sweep_past_concerts()
 
     if args.playlist:
         ingest_playlist_all(args.playlist)
