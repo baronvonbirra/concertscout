@@ -317,6 +317,37 @@ def resolve_instagram_via_search(artist_name):
         print(f"Error resolving Instagram via search for {artist_name}: {e}")
     return None
 
+def fetch_latest_instagram_post_shortcode(instagram_url, artist_name):
+    if not instagram_url:
+        return None
+    parts = instagram_url.split("instagram.com/")
+    if len(parts) < 2:
+        return None
+    username = parts[1].split("/")[0].split("?")[0].strip()
+    if not username:
+        return None
+
+    query = f"site:instagram.com/p/ {username}"
+    url = "https://lite.duckduckgo.com/lite/"
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS)
+    }
+    try:
+        res = robust_request("POST", url, data={"q": query}, headers=headers)
+        if res is not None and res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if "instagram.com/p/" in href and "duckduckgo" not in href:
+                    post_parts = href.split("/p/")
+                    if len(post_parts) > 1:
+                        shortcode = post_parts[1].split("/")[0].split("?")[0].strip()
+                        if shortcode:
+                            return shortcode
+    except Exception as e:
+        print(f"Error fetching latest post shortcode for {artist_name}: {e}")
+    return None
+
 def resolve_instagram(artist_name, spotify_id=None):
     print(f"Resolving Instagram for '{artist_name}'...")
 
@@ -466,13 +497,27 @@ def track_lastfm_concerts():
         return
     print("--- Scraping Last.fm Events for Active Artists ---")
     try:
-        res = supabase.table("artists").select("*").eq("is_active", True).execute()
+        # Calculate 7 days ago timestamp
+        seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
+
+        # Select active artists where last_scraped_at is null OR older than 7 days, limit to 15 per run
+        res = supabase.table("artists")\
+            .select("*")\
+            .eq("is_active", True)\
+            .or_(f"last_scraped_at.is.null,last_scraped_at.lt.{seven_days_ago}")\
+            .limit(15)\
+            .execute()
+
         artists = res.data if res.data else []
-        print(f"Found {len(artists)} active artists.")
+        print(f"Found {len(artists)} active artists due for scraping (limit 15 per run).")
 
         for artist in artists:
             artist_id = artist["id"]
             artist_name = artist["name"]
+            instagram_url = artist.get("instagram_url")
+
+            # Resolve latest Instagram post shortcode for state tracking/memorization
+            latest_shortcode = fetch_latest_instagram_post_shortcode(instagram_url, artist_name)
 
             scraped_events = scrape_lastfm_artist_events(artist_name)
             valid_concerts = []
@@ -502,7 +547,19 @@ def track_lastfm_concerts():
             else:
                 print(f"No concerts in Spain/Portugal found for '{artist_name}'.")
 
-            time.sleep(RATE_LIMIT_DELAY)
+            # Update scraping and state tracking timestamps in DB
+            try:
+                update_payload = {
+                    "last_scraped_at": datetime.now().isoformat()
+                }
+                if latest_shortcode:
+                    update_payload["last_instagram_post_id"] = latest_shortcode
+
+                supabase.table("artists").update(update_payload).eq("id", artist_id).execute()
+            except Exception as e:
+                print(f"Error updating scraper state for {artist_name}: {e}")
+
+            time.sleep(random.uniform(2.0, 4.0))
     except Exception as e:
         print(f"Error in tracking last.fm concerts: {e}")
 

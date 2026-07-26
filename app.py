@@ -159,7 +159,7 @@ def fetch_consolidated_data():
 
     try:
         # Fetch concerts joined with artist details
-        res = supabase.table("concerts").select("*, artists(id, name, spotify_id, instagram_url, lastfm_url, source_playlist, is_active)").execute()
+        res = supabase.table("concerts").select("*, artists(id, name, spotify_id, instagram_url, lastfm_url, source_playlist, is_active, last_instagram_post_id)").execute()
         concerts_list = res.data if res.data else []
 
         consolidated = []
@@ -182,6 +182,7 @@ def fetch_consolidated_data():
             merged["instagram_url"] = artist_data.get("instagram_url")
             merged["lastfm_url"] = artist_data.get("lastfm_url")
             merged["source_playlist"] = artist_data.get("source_playlist", "Weekly Ingestion")
+            merged["last_instagram_post_id"] = artist_data.get("last_instagram_post_id")
 
             # Map event_date to date for frontend compatibility
             merged["date"] = concert.get("event_date", "Unknown Date")
@@ -195,7 +196,7 @@ def fetch_consolidated_data():
             consolidated.append(merged)
 
         # Fetch all active artists so users can scan their feeds/stories directly
-        art_res = supabase.table("artists").select("id, name, spotify_id, instagram_url, source_playlist").eq("is_active", True).execute()
+        art_res = supabase.table("artists").select("id, name, spotify_id, instagram_url, source_playlist, last_instagram_post_id").eq("is_active", True).execute()
         active_artists = art_res.data if art_res.data else []
 
         return {
@@ -297,6 +298,7 @@ def main():
             ocrArtist: '',
             ocrArtistId: null,
             ocrArtistIG: '',
+            ocrLatestPostId: '',
             ocrStatus: '',
             ocrLoading: false,
             ocrResultText: '',
@@ -348,10 +350,11 @@ def main():
             get cities() {
                 return ['All', ...new Set(this.events.map(e => e.city))].sort();
             },
-            openOcrModal(artistName, artistId, instagramUrl) {
+            openOcrModal(artistName, artistId, instagramUrl, latestPostId) {
                 this.ocrArtist = artistName;
                 this.ocrArtistId = artistId;
                 this.ocrArtistIG = instagramUrl || '';
+                this.ocrLatestPostId = latestPostId || '';
                 this.ocrFile = null;
                 this.ocrImageUrl = '';
                 this.ocrResultText = '';
@@ -589,7 +592,7 @@ def main():
                                            class="bg-[#E1306C] text-white px-4 py-2 font-bold hover:bg-white hover:text-black transition-colors border-2 border-black text-center">INSTAGRAM</a>
                                     </template>
                                 </div>
-                                <button @click="openOcrModal(event.artist, event.artist_id, event.instagram_url)"
+                                <button @click="openOcrModal(event.artist, event.artist_id, event.instagram_url, event.last_instagram_post_id)"
                                         class="w-full bg-[#121212] text-[#CCFF00] hover:bg-[#CCFF00] hover:text-black py-2 border-2 border-black font-bold text-xs tracking-wider transition-all uppercase">
                                     Scan IG Story/Feed
                                 </button>
@@ -622,7 +625,7 @@ def main():
                                 <p class="mono text-[10px] uppercase tracking-wider text-gray-500 mb-4" x-text="'Source: ' + (artist.source_playlist || 'Unknown')"></p>
                             </div>
                             <div class="flex flex-col gap-2 mt-4">
-                                <button @click="openOcrModal(artist.name, artist.id, artist.instagram_url)"
+                                <button @click="openOcrModal(artist.name, artist.id, artist.instagram_url, artist.last_instagram_post_id)"
                                         class="w-full bg-[#CCFF00] text-black hover:bg-black hover:text-white px-3 py-2 border-2 border-black font-bold text-xs tracking-tight transition-all uppercase">
                                     Scan IG Story/Feed
                                 </button>
@@ -665,6 +668,25 @@ def main():
                         <span x-text="ocrFile ? 'Uploaded: ' + ocrFile.name : 'UPLOAD IG STORY SCREENSHOT / FLYER IMAGE'"></span>
                         <span class="text-[10px] opacity-60 font-normal mt-1">Accepts PNG, JPG, JPEG (drag and drop here)</span>
                     </div>
+
+                    <!-- Automated Latest Instagram Post Detection & One-Click Auto-Fill -->
+                    <template x-if="ocrLatestPostId">
+                        <div class="mt-4 p-4 border-4 border-black bg-purple-50">
+                            <p class="font-bold text-xs uppercase mb-2">📸 LATEST INSTAGRAM POST DETECTED:</p>
+                            <div class="flex gap-4 items-start">
+                                <img :src="'https://www.instagram.com/p/' + ocrLatestPostId + '/media/?size=m'"
+                                     class="w-24 h-24 object-cover border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                                     alt="Latest IG post preview">
+                                <div class="flex-1">
+                                    <p class="text-xs font-mono mb-2">Shortcode: <span x-text="ocrLatestPostId" class="font-bold text-purple-700 text-xs"></span></p>
+                                    <button @click="ocrImageUrl = 'https://www.instagram.com/p/' + ocrLatestPostId + '/media/?size=l'; ocrFile = null; ocrStatus = 'Latest post image URL auto-filled!';"
+                                            class="bg-[#CCFF00] hover:bg-black hover:text-white text-black font-bold text-xs px-3 py-2 border-2 border-black uppercase transition-all shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                                        USE LATEST POST IMAGE
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
 
                     <!-- OR URL Input -->
                     <div class="mt-4">
