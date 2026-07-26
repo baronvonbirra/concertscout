@@ -155,11 +155,11 @@ supabase = get_supabase_client()
 @st.cache_data(ttl=3600)
 def fetch_consolidated_data():
     if not supabase:
-        return []
+        return {"concerts": [], "artists": []}
 
     try:
         # Fetch concerts joined with artist details
-        res = supabase.table("concerts").select("*, artists(name, spotify_id, instagram_url, lastfm_url, source_playlist, is_active)").execute()
+        res = supabase.table("concerts").select("*, artists(id, name, spotify_id, instagram_url, lastfm_url, source_playlist, is_active, last_instagram_post_id)").execute()
         concerts_list = res.data if res.data else []
 
         consolidated = []
@@ -177,10 +177,12 @@ def fetch_consolidated_data():
 
             merged = {**concert}
             merged["artist"] = artist_data.get("name", "Unknown Artist")
+            merged["artist_id"] = artist_data.get("id") or concert.get("artist_id")
             merged["spotify_id"] = artist_data.get("spotify_id")
             merged["instagram_url"] = artist_data.get("instagram_url")
             merged["lastfm_url"] = artist_data.get("lastfm_url")
             merged["source_playlist"] = artist_data.get("source_playlist", "Weekly Ingestion")
+            merged["last_instagram_post_id"] = artist_data.get("last_instagram_post_id")
 
             # Map event_date to date for frontend compatibility
             merged["date"] = concert.get("event_date", "Unknown Date")
@@ -193,10 +195,17 @@ def fetch_consolidated_data():
 
             consolidated.append(merged)
 
-        return consolidated
+        # Fetch all active artists so users can scan their feeds/stories directly
+        art_res = supabase.table("artists").select("id, name, spotify_id, instagram_url, source_playlist, last_instagram_post_id").eq("is_active", True).execute()
+        active_artists = art_res.data if art_res.data else []
+
+        return {
+            "concerts": consolidated,
+            "artists": active_artists
+        }
     except Exception as e:
         st.error(f"Error fetching data: {e}")
-        return []
+        return {"concerts": [], "artists": []}
 
 def main():
     # Check if we should force refresh
@@ -235,8 +244,10 @@ def main():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <script src="https://cdn.tailwindcss.com"></script>
         <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
         <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
         <style>
+            [x-cloak] { display: none !important; }
             body {
                 background-color: #121212;
                 color: #FFFFFF;
@@ -278,14 +289,38 @@ def main():
         <div x-data="{
             search: '',
             city: 'All',
-            discovery: false,
+            viewMode: 'core',
             showTop: false,
-            events: window.concertData,
+            events: window.concertData.concerts || [],
+            allArtists: window.concertData.artists || [],
+
+            ocrOpen: false,
+            ocrArtist: '',
+            ocrArtistId: null,
+            ocrArtistIG: '',
+            ocrLatestPostId: '',
+            ocrStatus: '',
+            ocrLoading: false,
+            ocrResultText: '',
+            ocrMatchedKeywords: [],
+            ocrImageUrl: '',
+            ocrFile: null,
+            ocrProgress: 0,
+
+            formEventName: '',
+            formCity: 'Madrid',
+            formVenue: 'Wurlitzer Ballroom',
+            formDate: '',
+            formTicketUrl: '',
+            formSaving: false,
+            formSuccess: false,
+            formError: '',
+
             isNew(createdAt) {
                 if (!createdAt) return false;
                 const created = new Date(createdAt);
                 const now = new Date();
-                const diff = (now - created) / (1000 * 60 * 60); // hours
+                const diff = (now - created) / (1000 * 60 * 60);
                 return diff <= 72;
             },
             get filteredEvents() {
@@ -294,7 +329,7 @@ def main():
                         const matchSearch = e.artist.toLowerCase().includes(this.search.toLowerCase()) ||
                                             e.venue.toLowerCase().includes(this.search.toLowerCase());
                         const matchCity = this.city === 'All' || e.city === this.city;
-                        const matchDiscovery = this.discovery ? !e.is_core : e.is_core;
+                        const matchDiscovery = this.viewMode === 'refresh' ? !e.is_core : e.is_core;
                         return matchSearch && matchCity && matchDiscovery;
                     })
                     .sort((a, b) => {
@@ -305,8 +340,147 @@ def main():
                         return new Date(a.date) - new Date(b.date);
                     });
             },
+            get filteredArtists() {
+                return this.allArtists
+                    .filter(a => {
+                        return a.name.toLowerCase().includes(this.search.toLowerCase());
+                    })
+                    .sort((a, b) => a.name.localeCompare(b.name));
+            },
             get cities() {
                 return ['All', ...new Set(this.events.map(e => e.city))].sort();
+            },
+            openOcrModal(artistName, artistId, instagramUrl, latestPostId) {
+                this.ocrArtist = artistName;
+                this.ocrArtistId = artistId;
+                this.ocrArtistIG = instagramUrl || '';
+                this.ocrLatestPostId = latestPostId || '';
+                this.ocrFile = null;
+                this.ocrImageUrl = '';
+                this.ocrResultText = '';
+                this.ocrMatchedKeywords = [];
+                this.ocrStatus = '';
+                this.ocrProgress = 0;
+                this.formEventName = '';
+                this.formCity = 'Madrid';
+                this.formVenue = 'Wurlitzer Ballroom';
+                this.formDate = '';
+                this.formTicketUrl = '';
+                this.formSuccess = false;
+                this.formError = '';
+                this.ocrOpen = true;
+            },
+            handleFileSelect(evt) {
+                const f = evt.target.files[0];
+                if (f) {
+                    this.ocrFile = f;
+                    this.ocrImageUrl = '';
+                    this.ocrResultText = '';
+                    this.ocrStatus = 'File loaded: ' + f.name;
+                }
+            },
+            async runOcr() {
+                if (!this.ocrImageUrl && !this.ocrFile) {
+                    alert('Please upload a flyer screenshot or paste an image URL first!');
+                    return;
+                }
+                this.ocrLoading = true;
+                this.ocrStatus = 'Spawning Tesseract worker...';
+                this.ocrResultText = '';
+                this.ocrMatchedKeywords = [];
+                this.ocrProgress = 0;
+                this.formSuccess = false;
+                this.formError = '';
+
+                try {
+                    const worker = await Tesseract.createWorker('eng', 1, {
+                        logger: m => {
+                            if (m.status === 'recognizing text') {
+                                this.ocrStatus = 'Extracting text...';
+                                this.ocrProgress = Math.round(m.progress * 100);
+                            } else {
+                                this.ocrStatus = m.status;
+                            }
+                        }
+                    });
+
+                    const source = this.ocrFile || this.ocrImageUrl;
+                    const { data: { text } } = await worker.recognize(source);
+                    await worker.terminate();
+
+                    this.ocrResultText = text;
+                    this.ocrLoading = false;
+                    this.ocrStatus = 'Scan complete!';
+
+                    const textLower = text.toLowerCase();
+                    const triggerWords = ['spain', 'madrid', 'barcelona', 'tour', 'gira', 'concert', 'concierto', 'portugal', 'lisbon', 'lisboa', 'porto', 'sevilla', 'malaga', 'jerez', 'granada', 'valencia', 'bilbao'];
+                    this.ocrMatchedKeywords = triggerWords.filter(word => textLower.includes(word));
+
+                    this.formEventName = this.ocrArtist + ' Tour 2026';
+                    this.formTicketUrl = this.ocrArtistIG || '';
+
+                    const cities = ['Madrid', 'Barcelona', 'Sevilla', 'Málaga', 'Jerez', 'Granada', 'Valencia', 'Bilbao', 'Lisbon', 'Porto'];
+                    for (let c of cities) {
+                        if (textLower.includes(c.toLowerCase()) || (c === 'Lisbon' && textLower.includes('lisboa'))) {
+                            this.formCity = c;
+                            break;
+                        }
+                    }
+                } catch (err) {
+                    console.error(err);
+                    this.ocrLoading = false;
+                    this.ocrStatus = 'Error during scanning.';
+                    this.formError = 'Failed to scan image: ' + err.message;
+                }
+            },
+            async saveConcert() {
+                if (!this.formDate) {
+                    alert('Please specify the date of the concert!');
+                    return;
+                }
+                this.formSaving = true;
+                this.formSuccess = false;
+                this.formError = '';
+
+                const payload = {
+                    artist_id: this.ocrArtistId,
+                    event_name: this.formEventName,
+                    city: this.formCity,
+                    venue: this.formVenue,
+                    event_date: this.formDate,
+                    ticket_url: this.formTicketUrl || null,
+                    source: 'instagram_ocr'
+                };
+
+                try {
+                    const url = '__SUPABASE_URL__' + '/rest/v1/concerts';
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'apikey': '__SUPABASE_KEY__',
+                            'Authorization': 'Bearer ' + '__SUPABASE_KEY__',
+                            'Content-Type': 'application/json',
+                            'Prefer': 'return=representation'
+                        },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!res.ok) {
+                        const errData = await res.json();
+                        throw new Error(errData.message || 'Database insert failed.');
+                    }
+
+                    this.formSuccess = true;
+                    this.formSaving = false;
+                    setTimeout(() => {
+                        this.ocrOpen = false;
+                        this.forceRefresh();
+                    }, 1500);
+                } catch (err) {
+                    console.error(err);
+                    this.formSaving = false;
+                    this.formError = 'Error saving to database: ' + err.message;
+                }
             },
             forceRefresh() {
                 try {
@@ -335,13 +509,15 @@ def main():
 
                 <div class="flex flex-col md:flex-row gap-4 mb-8">
                     <input type="text" x-model="search" placeholder="SEARCH AS YOU TYPE..."
-                           class="w-full md:w-5/12 bg-white text-black border-4 border-black p-4 text-xl md:text-2xl mono focus:outline-none shadow-[4px_4px_0px_0px_rgba(204,255,0,1)]">
+                           class="w-full md:w-4/12 bg-white text-black border-4 border-black p-4 text-xl md:text-2xl mono focus:outline-none shadow-[4px_4px_0px_0px_rgba(204,255,0,1)]">
 
-                    <div class="flex border-4 border-white overflow-hidden w-full md:w-5/12">
-                        <button @click="discovery = false" :class="!discovery ? 'bg-white text-black' : 'text-white'"
+                    <div class="flex border-4 border-white overflow-hidden w-full md:w-6/12">
+                        <button @click="viewMode = 'core'" :class="viewMode === 'core' ? 'bg-white text-black' : 'text-white'"
                                 class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all">CORE BANDS</button>
-                        <button @click="discovery = true" :class="discovery ? 'bg-acid-lime text-black' : 'text-white'"
+                        <button @click="viewMode = 'refresh'" :class="viewMode === 'refresh' ? 'bg-acid-lime text-black' : 'text-white'"
                                 class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all border-l-4 border-white">WEEKLY REFRESH</button>
+                        <button @click="viewMode = 'scan'" :class="viewMode === 'scan' ? 'bg-[#FF5733] text-black' : 'text-white'"
+                                class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all border-l-4 border-white">CONTRIBUTE (SCAN)</button>
                     </div>
 
                     <button @click="forceRefresh()"
@@ -351,7 +527,7 @@ def main():
                 </div>
 
                 <!-- City Pills -->
-                <div class="flex flex-wrap gap-2">
+                <div class="flex flex-wrap gap-2" x-show="viewMode !== 'scan'">
                     <template x-for="c in cities" :key="c">
                         <div @click="city = c" :class="city === c ? 'active' : ''"
                              class="pill mono text-sm uppercase" x-text="c"></div>
@@ -359,76 +535,289 @@ def main():
                 </div>
             </div>
 
-            <!-- Grid -->
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                <template x-for="event in filteredEvents" :key="event.id">
-                    <div class="brutal-card p-6 flex flex-col justify-between"
-                         :class="{
-                            'safety-orange': event.is_core,
-                            '!border-[#CCFF00] !border-8': isNew(event.created_at)
-                         }">
-                        <div>
-                            <div class="flex justify-between items-start mb-4">
-                                <div class="flex gap-2">
-                                    <span x-show="isNew(event.created_at)" class="bg-[#CCFF00] text-black px-2 py-1 text-xs mono font-bold">NEW</span>
-                                    <span x-show="event.is_core" class="bg-[#FF5733] text-white px-2 py-1 text-xs mono">CORE</span>
-                                    <span x-show="!event.is_core" class="bg-black text-white px-2 py-1 text-xs mono">WEEKLY</span>
+            <!-- Concerts Grid -->
+            <div x-show="viewMode !== 'scan'">
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <template x-for="event in filteredEvents" :key="event.id">
+                        <div class="brutal-card p-6 flex flex-col justify-between"
+                             :class="{
+                                'safety-orange': event.is_core,
+                                '!border-[#CCFF00] !border-8': isNew(event.created_at)
+                             }">
+                            <div>
+                                <div class="flex justify-between items-start mb-4">
+                                    <div class="flex gap-2">
+                                        <span x-show="isNew(event.created_at)" class="bg-[#CCFF00] text-black px-2 py-1 text-xs mono font-bold">NEW</span>
+                                        <span x-show="event.is_core" class="bg-[#FF5733] text-white px-2 py-1 text-xs mono">CORE</span>
+                                        <span x-show="!event.is_core" class="bg-black text-white px-2 py-1 text-xs mono">WEEKLY</span>
+                                    </div>
+
+                                    <!-- Andalusia Map Mini-Thumb -->
+                                    <div class="w-12 h-12 relative">
+                                        <template x-if="['Málaga', 'Jerez'].includes(event.city)">
+                                            <svg viewBox="0 0 100 60" class="w-full h-full opacity-30">
+                                                <path d="M5,45 L20,55 L80,55 L95,45 L95,15 L70,5 L20,5 L5,15 Z" fill="none" stroke="black" stroke-width="2" />
+                                                <circle :cx="event.city === 'Málaga' ? 60 : 25" :cy="event.city === 'Málaga' ? 45 : 45" r="5" fill="#E60000" />
+                                            </svg>
+                                        </template>
+                                        <template x-if="!['Málaga', 'Jerez'].includes(event.city)">
+                                            <svg viewBox="0 0 24 24" class="w-full h-full opacity-20" fill="none" stroke="black" stroke-width="2">
+                                                <circle cx="12" cy="12" r="10" />
+                                                <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                                            </svg>
+                                        </template>
+                                    </div>
                                 </div>
 
-                                <!-- Andalusia Map Mini-Thumb -->
-                                <div class="w-12 h-12 relative">
-                                    <template x-if="['Málaga', 'Jerez'].includes(event.city)">
-                                        <svg viewBox="0 0 100 60" class="w-full h-full opacity-30">
-                                            <path d="M5,45 L20,55 L80,55 L95,45 L95,15 L70,5 L20,5 L5,15 Z" fill="none" stroke="black" stroke-width="2" />
-                                            <circle :cx="event.city === 'Málaga' ? 60 : 25" :cy="event.city === 'Málaga' ? 45 : 45" r="5" fill="#E60000" />
-                                        </svg>
+                                <h2 class="bebas text-4xl mb-2 leading-none" x-text="event.artist"></h2>
+                                <div class="mono text-sm mb-4 uppercase">
+                                    <span class="font-bold" x-text="event.city"></span> @ <span x-text="event.venue"></span>
+                                </div>
+
+                                <div class="bg-black text-white inline-block px-3 py-1 mono text-lg mb-4" x-text="event.date"></div>
+                            </div>
+
+                            <div class="mt-6 flex flex-col gap-2">
+                                <div class="flex gap-2 w-full">
+                                    <a :href="event.ticket_url || '#'" target="_blank"
+                                       class="bg-black text-white px-4 py-2 bebas text-xl hover:bg-acid-lime hover:text-black transition-colors border-2 border-black flex-1 text-center">GET TICKETS</a>
+
+                                    <template x-if="event.spotify_id">
+                                        <a :href="'https://open.spotify.com/artist/' + event.spotify_id" target="_blank"
+                                           class="bg-[#1DB954] text-white px-4 py-2 font-bold hover:bg-white hover:text-black transition-colors border-2 border-black text-center">SPOTIFY</a>
                                     </template>
-                                    <template x-if="!['Málaga', 'Jerez'].includes(event.city)">
-                                        <svg viewBox="0 0 24 24" class="w-full h-full opacity-20" fill="none" stroke="black" stroke-width="2">
-                                            <circle cx="12" cy="12" r="10" />
-                                            <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-                                        </svg>
+
+                                    <template x-if="event.instagram_url">
+                                        <a :href="event.instagram_url" target="_blank"
+                                           class="bg-[#E1306C] text-white px-4 py-2 font-bold hover:bg-white hover:text-black transition-colors border-2 border-black text-center">INSTAGRAM</a>
                                     </template>
                                 </div>
+                                <button @click="openOcrModal(event.artist, event.artist_id, event.instagram_url, event.last_instagram_post_id)"
+                                        class="w-full bg-[#121212] text-[#CCFF00] hover:bg-[#CCFF00] hover:text-black py-2 border-2 border-black font-bold text-xs tracking-wider transition-all uppercase">
+                                    Scan IG Story/Feed
+                                </button>
+                                <span class="mono text-[10px] opacity-50 self-end" x-text="'ID: ' + event.id"></span>
                             </div>
-
-                            <h2 class="bebas text-4xl mb-2 leading-none" x-text="event.artist"></h2>
-                            <div class="mono text-sm mb-4 uppercase">
-                                <span class="font-bold" x-text="event.city"></span> @ <span x-text="event.venue"></span>
-                            </div>
-
-                            <div class="bg-black text-white inline-block px-3 py-1 mono text-lg mb-4" x-text="event.date"></div>
                         </div>
+                    </template>
+                </div>
 
-                        <div class="mt-6 flex flex-col gap-2">
-                            <div class="flex gap-2 w-full">
-                                <a :href="event.ticket_url || '#'" target="_blank"
-                                   class="bg-black text-white px-4 py-2 bebas text-xl hover:bg-acid-lime hover:text-black transition-colors border-2 border-black flex-1 text-center">GET TICKETS</a>
+                <!-- Empty State -->
+                <div x-show="filteredEvents.length === 0" class="text-center py-20">
+                    <p class="bebas text-4xl opacity-50">NO TOURS FOUND. KEEP REBELLIOUS.</p>
+                </div>
+            </div>
 
-                                <template x-if="event.spotify_id">
-                                    <a :href="'https://open.spotify.com/artist/' + event.spotify_id" target="_blank"
-                                       class="bg-[#1DB954] text-white px-4 py-2 font-bold hover:bg-white hover:text-black transition-colors border-2 border-black text-center">SPOTIFY</a>
-                                </template>
+            <!-- Active Bands Grid for Direct In-Browser Scanning -->
+            <div x-show="viewMode === 'scan'" x-cloak>
+                <div class="mb-8 bg-[#FF5733] border-4 border-black p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-black">
+                    <h2 class="bebas text-4xl mb-2 tracking-wide uppercase">⚡ CROWD-SOURCED TOUR DISCOVERY ⚡</h2>
+                    <p class="mono text-sm leading-relaxed">
+                        Bands post their tour flyers on Instagram months before the ticketing sites list them. Select any of our active bands below to scan their IG profile feed, story, or a saved screenshot, and add new concerts directly to the database!
+                    </p>
+                </div>
 
-                                <template x-if="event.instagram_url">
-                                    <a :href="event.instagram_url" target="_blank"
-                                       class="bg-[#E1306C] text-white px-4 py-2 font-bold hover:bg-white hover:text-black transition-colors border-2 border-black text-center">INSTAGRAM</a>
-                                </template>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                    <template x-for="artist in filteredArtists" :key="artist.id">
+                        <div class="brutal-card p-4 bg-white text-black flex flex-col justify-between">
+                            <div>
+                                <h3 class="bebas text-3xl mb-1 leading-none" x-text="artist.name"></h3>
+                                <p class="mono text-[10px] uppercase tracking-wider text-gray-500 mb-4" x-text="'Source: ' + (artist.source_playlist || 'Unknown')"></p>
                             </div>
-                            <span class="mono text-[10px] opacity-50 self-end" x-text="'ID: ' + event.id"></span>
+                            <div class="flex flex-col gap-2 mt-4">
+                                <button @click="openOcrModal(artist.name, artist.id, artist.instagram_url, artist.last_instagram_post_id)"
+                                        class="w-full bg-[#CCFF00] text-black hover:bg-black hover:text-white px-3 py-2 border-2 border-black font-bold text-xs tracking-tight transition-all uppercase">
+                                    Scan IG Story/Feed
+                                </button>
+                                <div class="flex gap-2">
+                                    <template x-if="artist.spotify_id">
+                                        <a :href="'https://open.spotify.com/artist/' + artist.spotify_id" target="_blank"
+                                           class="flex-1 bg-[#1DB954] text-white text-center text-xs py-1 font-bold border border-black hover:bg-white hover:text-black transition-colors uppercase">Spotify</a>
+                                    </template>
+                                    <template x-if="artist.instagram_url">
+                                        <a :href="artist.instagram_url" target="_blank"
+                                           class="flex-1 bg-[#E1306C] text-white text-center text-xs py-1 font-bold border border-black hover:bg-white hover:text-black transition-colors uppercase">Instagram</a>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Empty State -->
+                <div x-show="filteredArtists.length === 0" class="text-center py-20">
+                    <p class="bebas text-4xl opacity-50">NO BANDS MATCHING YOUR SEARCH.</p>
+                </div>
+            </div>
+
+            <!-- NEO-BRUTALIST INSTAGRAM TOUR FLYER SCANNER MODAL -->
+            <div x-show="ocrOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 overflow-y-auto" x-cloak>
+                <div class="brutal-card bg-white text-black p-6 w-full max-w-2xl relative my-8" @click.away="ocrOpen = false">
+                    <!-- Close button -->
+                    <button @click="ocrOpen = false" class="absolute top-4 right-4 font-bold text-2xl hover:text-[#FF5733] transition-colors">&times;</button>
+
+                    <h2 class="bebas text-4xl mb-1 tracking-wide uppercase">TOUR POSTER SCANNER</h2>
+                    <p class="mono text-xs text-gray-500 mb-6 uppercase" x-text="'Act: ' + ocrArtist"></p>
+
+                    <!-- Drag and Drop / File Input -->
+                    <div class="border-4 border-dashed border-black p-6 bg-yellow-50 hover:bg-yellow-100 transition-colors flex flex-col items-center justify-center font-bold text-center relative">
+                        <input type="file" @change="handleFileSelect" class="absolute inset-0 opacity-0 cursor-pointer" accept="image/*">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <span x-text="ocrFile ? 'Uploaded: ' + ocrFile.name : 'UPLOAD IG STORY SCREENSHOT / FLYER IMAGE'"></span>
+                        <span class="text-[10px] opacity-60 font-normal mt-1">Accepts PNG, JPG, JPEG (drag and drop here)</span>
+                    </div>
+
+                    <!-- Automated Latest Instagram Post Detection & One-Click Auto-Fill -->
+                    <template x-if="ocrLatestPostId">
+                        <div class="mt-4 p-4 border-4 border-black bg-purple-50">
+                            <p class="font-bold text-xs uppercase mb-2">📸 LATEST INSTAGRAM POST DETECTED:</p>
+                            <div class="flex gap-4 items-start">
+                                <img :src="'https://www.instagram.com/p/' + ocrLatestPostId + '/media/?size=m'"
+                                     class="w-24 h-24 object-cover border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                                     alt="Latest IG post preview">
+                                <div class="flex-1">
+                                    <p class="text-xs font-mono mb-2">Shortcode: <span x-text="ocrLatestPostId" class="font-bold text-purple-700 text-xs"></span></p>
+                                    <button @click="ocrImageUrl = 'https://www.instagram.com/p/' + ocrLatestPostId + '/media/?size=l'; ocrFile = null; ocrStatus = 'Latest post image URL auto-filled!';"
+                                            class="bg-[#CCFF00] hover:bg-black hover:text-white text-black font-bold text-xs px-3 py-2 border-2 border-black uppercase transition-all shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                                        USE LATEST POST IMAGE
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- OR URL Input -->
+                    <div class="mt-4">
+                        <label class="block font-bold text-xs uppercase mb-1">OR PASTE FLYER IMAGE URL:</label>
+                        <input type="text" x-model="ocrImageUrl" @input="ocrFile = null; ocrResultText = ''; ocrStatus = ocrImageUrl ? 'URL set.' : ''" placeholder="https://example.com/tour-poster.jpg"
+                               class="w-full bg-white border-4 border-black p-3 text-sm mono focus:outline-none">
+                    </div>
+
+                    <!-- DIY Suggestion helpers -->
+                    <div class="mt-4 bg-gray-100 p-4 border-2 border-black">
+                        <p class="font-bold text-xs mb-2 uppercase">🔍 DO NOT HAVE THE FLYER? FIND IT ONLINE:</p>
+                        <div class="flex flex-wrap gap-2">
+                            <a :href="'https://www.google.com/search?tbm=isch&q=' + encodeURIComponent(ocrArtist + ' tour poster flyer spain')" target="_blank"
+                               class="bg-[#121212] text-white px-3 py-1 font-bold text-xs hover:bg-[#CCFF00] hover:text-black border border-black transition-colors uppercase">Google Images</a>
+                            <a :href="ocrArtistIG || 'https://www.instagram.com/'" target="_blank"
+                               class="bg-[#E1306C] text-white px-3 py-1 font-bold text-xs hover:bg-white hover:text-black border border-black transition-colors uppercase">Visit Instagram</a>
+                            <a :href="'https://duckduckgo.com/?q=' + encodeURIComponent(ocrArtist + ' tour dates spain') + '&iax=images&ia=images'" target="_blank"
+                               class="bg-[#FF5733] text-white px-3 py-1 font-bold text-xs hover:bg-white hover:text-black border border-black transition-colors uppercase">DuckDuckGo Images</a>
                         </div>
                     </div>
-                </template>
+
+                    <!-- Run Scanner Button -->
+                    <button @click="runOcr()" :disabled="ocrLoading"
+                            class="w-full bg-[#CCFF00] text-black font-bold border-4 border-black p-4 mt-6 text-xl bebas tracking-wider hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all uppercase flex justify-center items-center gap-2">
+                        <span x-show="ocrLoading" class="animate-spin inline-block w-5 h-5 border-2 border-black border-t-transparent rounded-full"></span>
+                        <span x-text="ocrLoading ? 'SCANNING PIXELS...' : 'RUN OCR SCAN'"></span>
+                    </button>
+
+                    <!-- Real-time scanner status -->
+                    <template x-if="ocrStatus">
+                        <div class="mt-4 p-3 bg-black text-white border-2 border-black mono text-xs">
+                            <div class="flex justify-between items-center mb-1">
+                                <span class="uppercase tracking-tight font-bold" x-text="ocrStatus"></span>
+                                <span x-show="ocrLoading" x-text="ocrProgress + '%'"></span>
+                            </div>
+                            <div x-show="ocrLoading" class="w-full bg-gray-700 h-2 border border-white">
+                                <div class="bg-[#CCFF00] h-full transition-all duration-300" :style="'width: ' + ocrProgress + '%'"></div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Match Results Section -->
+                    <template x-if="ocrResultText">
+                        <div class="mt-6 border-4 border-black p-4 bg-yellow-50">
+                            <h3 class="bebas text-2xl mb-2 tracking-wide uppercase">Matched Tour Keywords</h3>
+
+                            <!-- Highlight Box -->
+                            <div class="flex flex-wrap gap-2 mb-4">
+                                <template x-for="word in ocrMatchedKeywords" :key="word">
+                                    <span class="bg-[#FF5733] text-white font-bold mono text-xs px-2 py-1 border border-black uppercase" x-text="word"></span>
+                                </template>
+                                <template x-if="ocrMatchedKeywords.length === 0">
+                                    <span class="bg-gray-200 text-gray-700 font-bold mono text-xs px-2 py-1 uppercase">No typical keywords found (Please review manually)</span>
+                                </template>
+                            </div>
+
+                            <!-- Concert Save Form -->
+                            <div class="bg-white border-2 border-black p-4">
+                                <h4 class="bebas text-xl mb-3 tracking-wide uppercase">ONE-CLICK SAVE TO DATABASE</h4>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block font-bold text-xs uppercase mb-1">Event Name:</label>
+                                        <input type="text" x-model="formEventName" class="w-full bg-white border-2 border-black p-2 mono text-xs">
+                                    </div>
+                                    <div>
+                                        <label class="block font-bold text-xs uppercase mb-1">City:</label>
+                                        <select x-model="formCity" class="w-full bg-white border-2 border-black p-2 mono text-xs font-bold uppercase">
+                                            <option value="Madrid">Madrid</option>
+                                            <option value="Barcelona">Barcelona</option>
+                                            <option value="Málaga">Málaga</option>
+                                            <option value="Jerez">Jerez</option>
+                                            <option value="Sevilla">Sevilla</option>
+                                            <option value="Granada">Granada</option>
+                                            <option value="Valencia">Valencia</option>
+                                            <option value="Bilbao">Bilbao</option>
+                                            <option value="Lisbon">Lisbon</option>
+                                            <option value="Porto">Porto</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block font-bold text-xs uppercase mb-1">Venue:</label>
+                                        <input type="text" x-model="formVenue" class="w-full bg-white border-2 border-black p-2 mono text-xs">
+                                    </div>
+                                    <div>
+                                        <label class="block font-bold text-xs uppercase mb-1">Event Date:</label>
+                                        <input type="date" x-model="formDate" class="w-full bg-white border-2 border-black p-2 mono text-xs font-bold">
+                                    </div>
+                                    <div class="md:col-span-2">
+                                        <label class="block font-bold text-xs uppercase mb-1">Ticket / IG URL:</label>
+                                        <input type="text" x-model="formTicketUrl" class="w-full bg-white border-2 border-black p-2 mono text-xs">
+                                    </div>
+                                </div>
+
+                                <button @click="saveConcert()" :disabled="formSaving"
+                                        class="w-full bg-[#FF5733] text-white font-bold border-2 border-black p-3 mt-4 text-sm hover:bg-[#CCFF00] hover:text-black transition-all uppercase flex justify-center items-center gap-2">
+                                    <span x-show="formSaving" class="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full"></span>
+                                    <span x-text="formSaving ? 'SAVING CONCERT...' : 'INSERT CONCERT TO DATABASE'"></span>
+                                </button>
+
+                                <template x-if="formSuccess">
+                                    <div class="mt-3 p-2 bg-green-200 text-green-900 font-bold border-2 border-green-900 mono text-center text-xs uppercase">
+                                        🎉 Concert Saved successfully! Refreshing dashboard...
+                                    </div>
+                                </template>
+
+                                <template x-if="formError">
+                                    <div class="mt-3 p-2 bg-red-200 text-red-900 font-bold border-2 border-red-900 mono text-center text-xs" x-text="formError"></div>
+                                </template>
+                            </div>
+
+                            <!-- Raw OCR Text output (Accordion collapsible) -->
+                            <div x-data="{ open: false }" class="mt-4 border border-black">
+                                <button @click="open = !open" class="w-full bg-gray-200 p-2 text-left font-bold text-xs flex justify-between items-center">
+                                    <span>COLLAPSED RAW OCR TEXT</span>
+                                    <span x-text="open ? '▼' : '▶'"></span>
+                                </button>
+                                <div x-show="open" class="p-3 bg-white border-t border-black max-h-32 overflow-y-auto font-mono text-[10px] whitespace-pre-wrap" x-text="ocrResultText"></div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
             </div>
 
-            <!-- Empty State -->
-            <div x-show="filteredEvents.length === 0" class="text-center py-20">
-                <p class="bebas text-4xl opacity-50">NO TOURS FOUND. KEEP REBELLIOUS.</p>
-            </div>
         </div>
     </body>
     </html>
     """).strip()
+
+    html_template = html_template.replace("__SUPABASE_URL__", SUPABASE_URL or "")
+    html_template = html_template.replace("__SUPABASE_KEY__", SUPABASE_KEY or "")
     st.components.v1.html(html_template.replace("__CONCERT_DATA__", events_json), height=1000, scrolling=True)
 
 if __name__ == "__main__":

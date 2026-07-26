@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS artists (
     lastfm_url TEXT,
     source_playlist TEXT,
     is_active BOOLEAN DEFAULT true,
-    added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_scraped_at TIMESTAMP WITH TIME ZONE,
+    last_instagram_post_id TEXT
 );
 
 -- Concerts table
