@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import json
 import argparse
 import sys
+import re
 
 load_dotenv()
 
@@ -245,29 +246,73 @@ def ingest_playlist_all(playlist_url_or_id):
     elif not supabase:
         print(f"[No DB] Would insert new artists: {[a['name'] for a in new_artists_to_insert]}")
 
+def robust_request(method, url, max_retries=3, initial_delay=2.0, **kwargs):
+    # Ensure timeout is set
+    if "timeout" not in kwargs:
+        kwargs["timeout"] = 10
+
+    if "headers" not in kwargs:
+        kwargs["headers"] = {}
+    if "User-Agent" not in kwargs["headers"]:
+        kwargs["headers"]["User-Agent"] = random.choice(USER_AGENTS)
+
+    delay = initial_delay
+    for attempt in range(max_retries):
+        try:
+            # Pre-request delay to avoid hammering
+            time.sleep(random.uniform(delay, delay + 1.5))
+            if method.upper() == "POST":
+                res = requests.post(url, **kwargs)
+            else:
+                res = requests.get(url, **kwargs)
+
+            if res.status_code == 200:
+                return res
+            elif res.status_code in [403, 406, 429]:
+                print(f"Warning: Got status code {res.status_code} for {url}. Backing off...")
+                delay *= 2
+            else:
+                res.raise_for_status()
+        except Exception as e:
+            print(f"Request attempt {attempt + 1} failed for {url}: {e}")
+            delay *= 2
+
+    return None
+
+def is_valid_instagram_username(username):
+    if not username or len(username) > 30:
+        return False
+    # Filter out common reserved path words
+    blacklist = {
+        "p", "reel", "reels", "stories", "tv", "explore", "developer", "about",
+        "direct", "accounts", "emails", "legal", "help", "privacy", "terms",
+        "tag", "tags", "explore", "challenge", "hacked", "directory", "linking"
+    }
+    if username.lower() in blacklist:
+        return False
+    # Instagram usernames can contain alphanumeric, periods, underscores, and must match format
+    return bool(re.match(r"^[a-zA-Z0-9._]+$", username))
+
 def resolve_instagram_via_search(artist_name):
     query = f'"{artist_name}" instagram.com'
     url = "https://lite.duckduckgo.com/lite/"
     headers = {
         "User-Agent": random.choice(USER_AGENTS)
     }
-    time.sleep(RATE_LIMIT_DELAY)
     try:
-        res = requests.post(url, data={"q": query}, headers=headers)
-        if res.status_code == 200:
+        res = robust_request("POST", url, data={"q": query}, headers=headers)
+        if res is not None and res.status_code == 200:
             soup = BeautifulSoup(res.text, "html.parser")
             for a in soup.find_all("a", href=True):
                 href = a["href"]
+                # Skip sharer links, duckduckgo redirects, and known subpaths
                 if "instagram.com/" in href and "duckduckgo" not in href and "sharer" not in href:
+                    # Parse the username
                     parts = href.split("instagram.com/")
                     if len(parts) > 1:
-                        username_part = parts[1].split("/")[0].split("?")[0]
-                        if username_part and username_part not in ["p", "reel", "stories", "tv", "explore", "developer", "about"]:
+                        username_part = parts[1].split("/")[0].split("?")[0].strip()
+                        if is_valid_instagram_username(username_part):
                             return f"https://www.instagram.com/{username_part}/"
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                if "instagram.com/" in href and "duckduckgo" not in href:
-                    return href
     except Exception as e:
         print(f"Error resolving Instagram via search for {artist_name}: {e}")
     return None
@@ -333,15 +378,14 @@ def scrape_lastfm_artist_events(artist_name):
         "Accept-Language": "en-US,en;q=0.9",
     }
 
-    time.sleep(RATE_LIMIT_DELAY)
-
     events = []
     try:
-        res = requests.get(url, headers=headers)
+        res = robust_request("GET", url, headers=headers)
+        if res is None:
+            return []
         if res.status_code == 406:
             print(f"Warning: Last.fm rate limited or blocked (406) for artist: {artist_name}")
             return []
-        res.raise_for_status()
 
         soup = BeautifulSoup(res.text, "html.parser")
 
@@ -473,13 +517,12 @@ def check_instagram_tour_keywords(artist_name, instagram_url):
         "User-Agent": random.choice(USER_AGENTS)
     }
 
-    time.sleep(RATE_LIMIT_DELAY)
     trigger_words = ["spain", "madrid", "barcelona", "tour", "gira", "concert", "concierto", "portugal", "lisbon", "lisboa", "porto"]
     found_keywords = []
 
     try:
-        res = requests.post(url, data={"q": query}, headers=headers)
-        if res.status_code == 200:
+        res = robust_request("POST", url, data={"q": query}, headers=headers)
+        if res is not None and res.status_code == 200:
             soup = BeautifulSoup(res.text, "html.parser")
             snippets = []
             for td in soup.find_all("td", class_="result-snippet"):
@@ -503,14 +546,30 @@ def scan_instagram_enrichment():
         return
     print("--- Scanning Instagram for Tour Keywords ---")
     try:
+        # Fetch existing concerts to extract artist_ids with scheduled concerts
+        concert_res = supabase.table("concerts").select("artist_id").execute()
+        artists_with_concerts = {c["artist_id"] for c in concert_res.data} if concert_res.data else set()
+
         res = supabase.table("artists").select("*").eq("is_active", True).execute()
         artists = res.data if res.data else []
-        for artist in artists:
+
+        # Filter out artists that already have listed concerts
+        artists_to_scan = [a for a in artists if a["id"] not in artists_with_concerts]
+
+        # Shuffle remaining and check at most 10 random artists per run
+        random.shuffle(artists_to_scan)
+        selected_artists = artists_to_scan[:10]
+
+        print(f"Scanning up to 10 random active artists without existing concerts (out of {len(artists_to_scan)} candidates)...")
+
+        for artist in selected_artists:
             instagram_url = artist.get("instagram_url")
             if instagram_url:
                 is_flagged, matched = check_instagram_tour_keywords(artist["name"], instagram_url)
                 if is_flagged:
                     print(f"⚠️ MANUAL REVIEW REQUIRED: Artist '{artist['name']}' has potential tour info! Matched keywords: {matched}")
+                # Additional safety delay between keyword scans
+                time.sleep(random.uniform(2.0, 4.0))
     except Exception as e:
         print(f"Error scanning Instagram enrichment: {e}")
 
