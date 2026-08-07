@@ -39,6 +39,10 @@ USER_AGENTS = [
 
 RATE_LIMIT_DELAY = 0.5
 
+# Circuit breaker flags to prevent hammering when blocked
+LASTFM_BLOCKED = False
+DDG_BLOCKED = False
+
 # Spotify Auth Cache
 _spotify_token_cache = {"token": None, "expires_at": 0}
 
@@ -247,6 +251,16 @@ def ingest_playlist_all(playlist_url_or_id):
         print(f"[No DB] Would insert new artists: {[a['name'] for a in new_artists_to_insert]}")
 
 def robust_request(method, url, max_retries=3, initial_delay=2.0, **kwargs):
+    global LASTFM_BLOCKED, DDG_BLOCKED
+
+    # Check circuit breakers before even starting the request
+    if "last.fm" in url and LASTFM_BLOCKED:
+        print(f"Skipping request to {url} due to active Last.fm circuit breaker.")
+        return None
+    if "duckduckgo.com" in url and DDG_BLOCKED:
+        print(f"Skipping request to {url} due to active DuckDuckGo circuit breaker.")
+        return None
+
     # Ensure timeout is set
     if "timeout" not in kwargs:
         kwargs["timeout"] = 10
@@ -266,15 +280,26 @@ def robust_request(method, url, max_retries=3, initial_delay=2.0, **kwargs):
             else:
                 res = requests.get(url, **kwargs)
 
-            if res.status_code == 200:
+            if 200 <= res.status_code < 300:
                 return res
             elif res.status_code in [403, 406, 429]:
-                print(f"Warning: Got status code {res.status_code} for {url}. Backing off...")
-                delay *= 2
+                print(f"Warning: Got status code {res.status_code} for {url}. Blocking further requests to this domain.")
+                if "last.fm" in url:
+                    LASTFM_BLOCKED = True
+                if "duckduckgo.com" in url:
+                    DDG_BLOCKED = True
+                return None
             else:
                 res.raise_for_status()
         except Exception as e:
             print(f"Request attempt {attempt + 1} failed for {url}: {e}")
+            if attempt == max_retries - 1:
+                # Trigger circuit breaker if we reach the last retry attempt on connection issues
+                print(f"Max retries exceeded for {url}. Activating circuit breaker.")
+                if "last.fm" in url:
+                    LASTFM_BLOCKED = True
+                if "duckduckgo.com" in url:
+                    DDG_BLOCKED = True
             delay *= 2
 
     return None
@@ -383,9 +408,15 @@ def enrich_artists_instagram():
         return
     print("--- Running Instagram Page Resolver ---")
     try:
-        res = supabase.table("artists").select("*").eq("is_active", True).is_("instagram_url", "null").execute()
+        # Limit Instagram resolutions per run to avoid rate limits on search engines
+        res = supabase.table("artists")\
+            .select("*")\
+            .eq("is_active", True)\
+            .is_("instagram_url", "null")\
+            .limit(10)\
+            .execute()
         artists = res.data if res.data else []
-        print(f"Found {len(artists)} active artists without Instagram URL.")
+        print(f"Found {len(artists)} active artists without Instagram URL (processing up to 10).")
         for artist in artists:
             artist_id = artist["id"]
             artist_name = artist["name"]
