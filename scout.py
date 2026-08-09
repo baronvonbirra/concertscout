@@ -10,8 +10,11 @@ import json
 import argparse
 import sys
 import re
+import base64
 
 load_dotenv()
+
+_monthly_listeners_cache = {}
 
 # Environment Variables
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -45,6 +48,513 @@ DDG_BLOCKED = False
 
 # Spotify Auth Cache
 _spotify_token_cache = {"token": None, "expires_at": 0}
+
+def get_spotify_write_token():
+    refresh_token = os.environ.get("SPOTIFY_REFRESH_TOKEN")
+    if not refresh_token:
+        print("Warning: SPOTIFY_REFRESH_TOKEN not found in environment. Falling back to client credentials...")
+        return get_spotify_token()
+
+    now = time.time()
+    try:
+        url = "https://accounts.spotify.com/api/token"
+        headers = {}
+        if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
+            auth_str = f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}"
+            auth_b64 = base64.b64encode(auth_str.encode()).decode()
+            headers["Authorization"] = f"Basic {auth_b64}"
+            data = {
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token
+            }
+        else:
+            print("Error: Spotify Client ID or Secret not set. Cannot use refresh token flow.")
+            return get_spotify_token()
+
+        res = requests.post(url, data=data, headers=headers, timeout=10)
+        res.raise_for_status()
+        res_data = res.json()
+        return res_data.get("access_token")
+    except Exception as e:
+        print(f"Error refreshing Spotify user token: {e}. Falling back to client credentials...")
+        return get_spotify_token()
+
+def get_monthly_listeners(artist_id):
+    if not artist_id:
+        return 0
+    if artist_id in _monthly_listeners_cache:
+        return _monthly_listeners_cache[artist_id]
+
+    url = f"https://open.spotify.com/artist/{artist_id}"
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept-Language": "en-US,en;q=0.9"
+    }
+
+    # Scout V2.0 rule: mandatory 0.5-second delay before all external API calls
+    time.sleep(0.5)
+
+    try:
+        # Avoid circuit breaker if possible but respect connection errors
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            meta = soup.find("meta", property="og:description")
+            if not meta:
+                meta = soup.find("meta", attrs={"name": "description"})
+            if meta:
+                content = meta.get("content", "")
+                match = re.search(r"([\d.,MKB]+)\s+monthly\s+listeners", content, re.IGNORECASE)
+                if match:
+                    listeners_str = match.group(1).replace(",", "")
+                    if "M" in listeners_str.upper():
+                        val = float(listeners_str.upper().replace("M", "")) * 1_000_000
+                    elif "K" in listeners_str.upper():
+                        val = float(listeners_str.upper().replace("K", "")) * 1_000
+                    elif "B" in listeners_str.upper():
+                        val = float(listeners_str.upper().replace("B", "")) * 1_000_000_000
+                    else:
+                        val = float(listeners_str)
+                    count = int(val)
+                    _monthly_listeners_cache[artist_id] = count
+                    return count
+    except Exception as e:
+        print(f"Error scraping monthly listeners for artist {artist_id}: {e}")
+
+    _monthly_listeners_cache[artist_id] = 0
+    return 0
+
+def discover_punk_candidates(token):
+    print("--- Starting Candidate Discovery and Classification ---")
+    headers = {"Authorization": f"Bearer {token}"}
+    candidates = {}
+
+    # 28 days release window definition
+    execution_date = datetime.now().date()
+    start_date = execution_date - timedelta(days=28)
+
+    def parse_release_date(date_str):
+        if not date_str:
+            return None
+        try:
+            if len(date_str) == 4:
+                return datetime.strptime(date_str, "%Y").date()
+            elif len(date_str) == 7:
+                return datetime.strptime(date_str, "%Y-%m").date()
+            else:
+                return datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+    def is_eligible(track_name, album_name, release_date_str):
+        rel_date = parse_release_date(release_date_str)
+        if not rel_date or rel_date < start_date or rel_date > execution_date:
+            return False
+
+        # Filter track name and album name to exclude remixes, live, compilation, etc.
+        excluded_keywords = ["remix", "compilation", "live", "acoustic", "demo", "instrumental", "remaster", "mix"]
+        text = f"{track_name} {album_name}".lower()
+        for kw in excluded_keywords:
+            # Match word boundary or prefix/suffix to avoid filtering out words like 'live' in 'alive'
+            if re.search(rf"\b{kw}\b", text):
+                return False
+        return True
+
+    # --- Source 1: Active Database Artists ---
+    active_artists = []
+    if supabase:
+        try:
+            res = supabase.table("artists").select("id, name, spotify_id").eq("is_active", True).execute()
+            active_artists = res.data if res.data else []
+        except Exception as e:
+            print(f"Error fetching active artists for candidate seeding: {e}")
+
+    print(f"Seeding candidates from {len(active_artists)} active database artists...")
+    for artist in active_artists:
+        artist_id = artist.get("spotify_id")
+        if not artist_id:
+            continue
+
+        # Fetch artist albums/singles
+        url = f"https://api.spotify.com/v1/artists/{artist_id}/albums"
+        params = {"include_groups": "single,album", "market": "ES", "limit": 20}
+        time.sleep(0.5) # rate limit delay
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            if res.status_code == 200:
+                albums = res.json().get("items", [])
+                for album in albums:
+                    album_id = album.get("id")
+                    album_name = album.get("name", "")
+                    release_date_str = album.get("release_date")
+
+                    # Basic date filtering before querying tracks
+                    album_date = parse_release_date(release_date_str)
+                    if not album_date or album_date < start_date or album_date > execution_date:
+                        continue
+
+                    # Fetch tracks of this album
+                    tracks_url = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
+                    time.sleep(0.5)
+                    t_res = requests.get(tracks_url, headers=headers, params={"limit": 50}, timeout=10)
+                    if t_res.status_code == 200:
+                        tracks = t_res.json().get("items", [])
+                        for track in tracks:
+                            track_id = track.get("id")
+                            track_name = track.get("name", "")
+
+                            if is_eligible(track_name, album_name, release_date_str):
+                                candidates[track_id] = {
+                                    "track_id": track_id,
+                                    "track_name": track_name,
+                                    "album_name": album_name,
+                                    "release_date": release_date_str,
+                                    "artist_id": artist_id,
+                                    "artist_name": artist.get("name"),
+                                    "spotify_id": artist_id
+                                }
+        except Exception as e:
+            print(f"Error fetching albums for artist {artist.get('name')}: {e}")
+
+    # --- Source 2: Broad Punk Genre Searches ---
+    genres = ["punk", "pop punk", "hardcore", "skate punk", "post-hardcore", "emo", "screamo"]
+    print(f"Searching broad Spotify genre queries for {genres}...")
+    for genre in genres:
+        url = "https://api.spotify.com/v1/search"
+        params = {
+            "q": f'genre:"{genre}"',
+            "type": "track",
+            "market": "ES",
+            "limit": 50
+        }
+        time.sleep(0.5)
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            if res.status_code == 200:
+                tracks = res.json().get("tracks", {}).get("items", [])
+                for track in tracks:
+                    track_id = track.get("id")
+                    track_name = track.get("name", "")
+                    album = track.get("album", {})
+                    album_name = album.get("name", "")
+                    release_date_str = album.get("release_date")
+
+                    if is_eligible(track_name, album_name, release_date_str):
+                        artists = track.get("artists", [])
+                        if artists:
+                            primary_artist = artists[0]
+                            artist_id = primary_artist.get("id")
+                            artist_name = primary_artist.get("name")
+
+                            if track_id not in candidates:
+                                candidates[track_id] = {
+                                    "track_id": track_id,
+                                    "track_name": track_name,
+                                    "album_name": album_name,
+                                    "release_date": release_date_str,
+                                    "artist_id": artist_id,
+                                    "artist_name": artist_name,
+                                    "spotify_id": artist_id
+                                }
+        except Exception as e:
+            print(f"Error performing genre search for '{genre}': {e}")
+
+    # --- Fetch Monthly Listeners & Classify Tiers ---
+    print(f"Discovered total of {len(candidates)} raw track candidates. Fetching monthly listeners...")
+    classified_candidates = []
+
+    for t_id, item in candidates.items():
+        artist_id = item["artist_id"]
+        listeners = get_monthly_listeners(artist_id)
+
+        # Classify Tier
+        if listeners > 100000:
+            tier = "Major"
+        elif listeners >= 10000:
+            tier = "Mid"
+        elif listeners >= 1000:
+            tier = "Indie"
+        else:
+            tier = "Emerging"
+
+        item["monthly_listeners"] = listeners
+        item["tier"] = tier
+        classified_candidates.append(item)
+        print(f"Candidate: '{item['track_name']}' by '{item['artist_name']}' | Listeners: {listeners} | Tier: {tier} | Released: {item['release_date']}")
+
+    return classified_candidates
+
+def select_weekly_playlist_tracks(candidates):
+    print("--- Selecting Tracks for Weekly Discovery Playlist ---")
+    if not candidates:
+        print("Warning: No candidates found.")
+        return []
+
+    # Get historical data from Supabase
+    historical_track_ids = set()
+    recent_artist_ids = set()
+
+    if supabase:
+        try:
+            # Fetch all historical tracks
+            start = 0
+            page_size = 1000
+            while True:
+                res = supabase.table("playlist_history").select("track_id").range(start, start + page_size - 1).execute()
+                if not res.data:
+                    break
+                for row in res.data:
+                    historical_track_ids.add(row["track_id"])
+                if len(res.data) < page_size:
+                    break
+                start += page_size
+
+            # Fetch artists added in the last 30 days
+            thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat()
+            recent_res = supabase.table("playlist_history").select("artist_id").gte("added_at", thirty_days_ago).execute()
+            if recent_res.data:
+                for row in recent_res.data:
+                    recent_artist_ids.add(row["artist_id"])
+
+            print(f"Loaded {len(historical_track_ids)} historical track IDs and {len(recent_artist_ids)} recently featured artist IDs from DB.")
+        except Exception as e:
+            print(f"Error querying playlist history from database: {e}")
+
+    # Filter candidates
+    eligible_candidates = []
+    for c in candidates:
+        if c["track_id"] in historical_track_ids:
+            # Duplicate track check
+            continue
+        if c["artist_id"] in recent_artist_ids:
+            # Artist 30 days repeat cap
+            continue
+        eligible_candidates.append(c)
+
+    print(f"Remaining eligible candidates after de-duplication: {len(eligible_candidates)}")
+
+    # Group by tier
+    tiers_map = {
+        "Major": [],
+        "Mid": [],
+        "Indie": [],
+        "Emerging": []
+    }
+    for c in eligible_candidates:
+        t = c["tier"]
+        if t in tiers_map:
+            tiers_map[t].append(c)
+
+    # Required distribution
+    required = {
+        "Major": 1,
+        "Mid": 2,
+        "Indie": 5,
+        "Emerging": 2
+    }
+
+    selected_tracks = []
+    for tier, count in required.items():
+        candidates_in_tier = list(tiers_map[tier])
+        print(f"Tier {tier}: Found {len(candidates_in_tier)} candidates. Need {count}.")
+
+        # If we have enough, we randomly sample
+        if len(candidates_in_tier) >= count:
+            selected = random.sample(candidates_in_tier, count)
+            selected_tracks.extend(selected)
+        else:
+            print(f"Warning: Not enough candidates in Tier {tier}. Relaxation logic triggered.")
+            # relaxation step 1: allow artists featured in last 30 days (but still no track duplicates)
+            relaxed_candidates = [c for c in candidates if c["tier"] == tier and c["track_id"] not in historical_track_ids]
+            # De-duplicate artist within this list to prevent selecting same artist twice in same week
+            seen_artists_this_week = set()
+            clean_relaxed = []
+            for c in relaxed_candidates:
+                if c["artist_id"] not in seen_artists_this_week:
+                    clean_relaxed.append(c)
+                    seen_artists_this_week.add(c["artist_id"])
+
+            if len(clean_relaxed) >= count:
+                selected = random.sample(clean_relaxed, count)
+                selected_tracks.extend(selected)
+                print(f"Successfully fulfilled Tier {tier} count using relaxed artist-cap criteria.")
+            else:
+                # relaxation step 2: take whatever we can find in this tier, and if still short, fill from other tiers to ensure exactly 10 tracks
+                selected_tracks.extend(clean_relaxed)
+                print(f"Warning: Could only find {len(clean_relaxed)} total tracks for Tier {tier} after relaxation.")
+
+    # If we are STILL short of exactly 10 tracks, we must pad from other tiers to reach exactly 10 (maintaining DoD count)
+    total_needed = 10
+    if len(selected_tracks) < total_needed:
+        still_needed = total_needed - len(selected_tracks)
+        print(f"Warning: Selection has {len(selected_tracks)} tracks. Padding {still_needed} tracks from any available tier...")
+        # Get any candidates that are not currently selected or in historical track ids
+        already_selected_ids = {s["track_id"] for s in selected_tracks}
+        pad_candidates = [c for c in candidates if c["track_id"] not in historical_track_ids and c["track_id"] not in already_selected_ids]
+
+        # Randomly select padding candidates
+        if len(pad_candidates) >= still_needed:
+            padded = random.sample(pad_candidates, still_needed)
+            selected_tracks.extend(padded)
+        else:
+            # Last resort: just use any pad candidates we can get
+            selected_tracks.extend(pad_candidates)
+
+    # Ensure exactly 10 tracks!
+    selected_tracks = selected_tracks[:10]
+    print(f"Selection complete. Selected {len(selected_tracks)} tracks.")
+    for idx, t in enumerate(selected_tracks):
+        print(f"[{idx+1}] Track: '{t['track_name']}' | Artist: '{t['artist_name']}' | Tier: {t['tier']} | Listeners: {t['monthly_listeners']}")
+
+    return selected_tracks
+
+def generate_monday_playlist():
+    print("--- Running Monday Playlist Generation Flow ---")
+
+    # 1. Get write token
+    token = get_spotify_write_token()
+    if not token:
+        print("Error: Could not obtain Spotify access token.")
+        return
+
+    # 2. Discover candidates
+    try:
+        candidates = discover_punk_candidates(token)
+    except Exception as e:
+        print(f"Error during candidate discovery: {e}")
+        return
+
+    # 3. Track selection
+    try:
+        selected = select_weekly_playlist_tracks(candidates)
+    except Exception as e:
+        print(f"Error during track selection: {e}")
+        return
+
+    if not selected:
+        print("Warning: No tracks were selected. Exiting playlist generation.")
+        return
+
+    playlist_id = "2ZqhNVOPmA3Nf0SRpzJ9Yz"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    # 4. Playlist Pruning (> 84 days old)
+    print("Checking playlist tracks for pruning (>84 days old)...")
+    tracks_to_prune = []
+    try:
+        url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+        time.sleep(0.5)
+        res = requests.get(url, headers=headers, params={"limit": 100}, timeout=10)
+        if res.status_code == 200:
+            items = res.json().get("items", [])
+            cutoff_date = datetime.now() - timedelta(days=84)
+            for item in items:
+                added_at_str = item.get("added_at")
+                track = item.get("track")
+                if added_at_str and track:
+                    track_uri = track.get("uri")
+                    # parse added_at, format: "2015-01-15T12:34:56Z"
+                    try:
+                        added_at = datetime.strptime(added_at_str[:19], "%Y-%m-%dT%H:%M:%S")
+                        if added_at < cutoff_date:
+                            print(f"Pruning: Track '{track.get('name')}' by '{track.get('artists')[0].get('name') if track.get('artists') else 'Unknown'}' is older than 84 days (Added: {added_at_str}).")
+                            tracks_to_prune.append({"uri": track_uri})
+                    except Exception as pe:
+                        print(f"Error parsing added_at date '{added_at_str}': {pe}")
+        else:
+            print(f"Warning: Could not fetch playlist items for pruning. Status: {res.status_code}")
+    except Exception as e:
+        print(f"Error during playlist pruning check: {e}")
+
+    # Delete pruned tracks if any
+    if tracks_to_prune:
+        print(f"Removing {len(tracks_to_prune)} expired tracks from playlist...")
+        try:
+            url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+            time.sleep(0.5)
+            # Delete expects payload with "tracks": [{"uri": "..."}]
+            res = requests.delete(url, headers=headers, json={"tracks": tracks_to_prune}, timeout=10)
+            if res.status_code == 200:
+                print("Pruned tracks successfully deleted.")
+            else:
+                print(f"Warning: Deleting pruned tracks returned status: {res.status_code}")
+        except Exception as e:
+            print(f"Error deleting pruned tracks: {e}")
+
+    # 5. Add new selected tracks to top (position 0)
+    track_uris = [f"spotify:track:{s['track_id']}" for s in selected]
+    print(f"Adding {len(track_uris)} new tracks to the top of the playlist...")
+    try:
+        url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+        payload = {
+            "uris": track_uris,
+            "position": 0
+        }
+        time.sleep(0.5)
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        if res.status_code in [200, 201]:
+            print("Successfully populated weekly playlist tracks!")
+        else:
+            print(f"Warning: Failed to add tracks to Spotify playlist. Status code: {res.status_code}")
+    except Exception as e:
+        print(f"Error adding tracks to Spotify playlist: {e}")
+
+    # 6. Insert into database `playlist_history` table
+    if supabase:
+        print("Logging selected tracks into playlist_history...")
+        for s in selected:
+            try:
+                supabase.table("playlist_history").insert({
+                    "track_id": s["track_id"],
+                    "track_name": s["track_name"],
+                    "artist_id": s["artist_id"],
+                    "artist_name": s["artist_name"],
+                    "tier": s["tier"],
+                    "monthly_listeners": s["monthly_listeners"],
+                    "release_date": s["release_date"]
+                }).execute()
+            except Exception as dbe:
+                print(f"Error inserting track log into DB for {s['track_name']}: {dbe}")
+
+        # 7. Deduplicate artist database / Tour Tracker Integration
+        print("Integrating new artists with Tour Tracker...")
+        existing_artist_names = set()
+        try:
+            start = 0
+            page_size = 1000
+            while True:
+                res = supabase.table("artists").select("name").range(start, start + page_size - 1).execute()
+                if not res.data:
+                    break
+                for row in res.data:
+                    existing_artist_names.add(row["name"].lower())
+                if len(res.data) < page_size:
+                    break
+                start += page_size
+        except Exception as e:
+            print(f"Error reading existing artists for integration: {e}")
+
+        for s in selected:
+            artist_name = s["artist_name"]
+            artist_id = s["artist_id"]
+            if artist_name.lower() not in existing_artist_names:
+                print(f"New artist '{artist_name}' discovered. Inserting into Tour Tracker DB...")
+                try:
+                    supabase.table("artists").insert({
+                        "name": artist_name,
+                        "spotify_id": artist_id,
+                        "source_playlist": "Punk in Progress",
+                        "is_active": True,
+                        "added_at": datetime.now().isoformat()
+                    }).execute()
+                    existing_artist_names.add(artist_name.lower())
+                except Exception as ie:
+                    print(f"Error inserting new artist '{artist_name}' into DB: {ie}")
+            else:
+                print(f"Artist '{artist_name}' already exists in DB. Skipping.")
+
+    else:
+        print("[No DB] Would log to history and integrate artists with Tour Tracker.")
 
 def get_spotify_token():
     now = time.time()
@@ -687,6 +1197,7 @@ def main():
     parser = argparse.ArgumentParser(description="ConcertScout Ingest & Enrichment Pipeline")
     parser.add_argument("--playlist", type=str, help="On-demand playlist ingestion URL/ID (Module B)")
     parser.add_argument("--weekly", action="store_true", help="Run the Wednesday Automated Ingestion (Module A)")
+    parser.add_argument("--monday-playlist", action="store_true", help="Run the Monday Automated Playlist Curation")
 
     args = parser.parse_args()
 
@@ -699,6 +1210,8 @@ def main():
     elif args.weekly:
         ingest_weekly_punk()
         run_enrichment_pipeline()
+    elif args.monday_playlist:
+        generate_monday_playlist()
     else:
         # Default runs the full enrichment pipeline for existing active bands
         run_enrichment_pipeline()

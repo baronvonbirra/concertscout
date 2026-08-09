@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import scout
 import json
+from datetime import datetime
 
 class TestScoutV2(unittest.TestCase):
 
@@ -133,6 +134,186 @@ class TestScoutV2(unittest.TestCase):
             # Reset flags to not affect other tests
             scout.LASTFM_BLOCKED = False
             scout.DDG_BLOCKED = False
+
+    @patch('scout.requests.get')
+    def test_get_monthly_listeners_parsing(self, mock_get):
+        scout._monthly_listeners_cache = {}
+
+        # Test 1: "167.3K monthly listeners"
+        mock_res1 = MagicMock()
+        mock_res1.status_code = 200
+        mock_res1.text = '<html><meta property="og:description" content="Artist · 167.3K monthly listeners."></html>'
+
+        # Test 2: "17.7M monthly listeners"
+        mock_res2 = MagicMock()
+        mock_res2.status_code = 200
+        mock_res2.text = '<html><meta name="description" content="Artist · 17.7M monthly listeners."></html>'
+
+        # Test 3: "25,431 monthly listeners"
+        mock_res3 = MagicMock()
+        mock_res3.status_code = 200
+        mock_res3.text = '<html><meta property="og:description" content="Artist · 25,431 monthly listeners."></html>'
+
+        mock_get.side_effect = [mock_res1, mock_res2, mock_res3]
+
+        self.assertEqual(scout.get_monthly_listeners("artist1"), 167300)
+        self.assertEqual(scout.get_monthly_listeners("artist2"), 17700000)
+        self.assertEqual(scout.get_monthly_listeners("artist3"), 25431)
+
+        # Test cache hits
+        self.assertEqual(scout.get_monthly_listeners("artist1"), 167300)
+        self.assertEqual(mock_get.call_count, 3) # no new request for cached artist1
+
+    @patch('scout.requests.post')
+    @patch.dict('os.environ', {'SPOTIFY_REFRESH_TOKEN': 'test_refresh_token'})
+    @patch('scout.SPOTIFY_CLIENT_ID', 'test_id')
+    @patch('scout.SPOTIFY_CLIENT_SECRET', 'test_secret')
+    def test_get_spotify_write_token(self, mock_post):
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.json.return_value = {"access_token": "mock_write_token"}
+        mock_post.return_value = mock_res
+
+        token = scout.get_spotify_write_token()
+        self.assertEqual(token, "mock_write_token")
+
+    @patch('scout.supabase')
+    def test_select_weekly_playlist_tracks(self, mock_supabase):
+        # Setup mock database responses
+        mock_select = MagicMock()
+        mock_range = MagicMock()
+        mock_execute = MagicMock()
+        mock_execute.data = [{"track_id": "duplicate_track_1"}]
+
+        mock_supabase.table.return_value = mock_select
+        mock_select.select.return_value = mock_range
+        mock_range.range.return_value = mock_execute
+
+        # Mock gte response for recent artist IDs (last 30 days)
+        mock_gte = MagicMock()
+        mock_recent_execute = MagicMock()
+        mock_recent_execute.data = [{"artist_id": "recent_artist_id"}]
+        mock_select.select.return_value = mock_gte
+        mock_gte.gte.return_value = mock_recent_execute
+        mock_recent_execute.execute.return_value = mock_recent_execute
+
+        # Set first select mock flow
+        mock_range.execute.return_value = mock_execute
+
+        # Candidates to select from
+        candidates = [
+            # Major candidate (>100k listeners)
+            {"track_id": "t1", "track_name": "Major Song", "artist_id": "a1", "artist_name": "Artist 1", "tier": "Major", "monthly_listeners": 150000, "release_date": "2026-02-01"},
+            # Mid candidates (10k-100k listeners)
+            {"track_id": "t2", "track_name": "Mid Song 1", "artist_id": "a2", "artist_name": "Artist 2", "tier": "Mid", "monthly_listeners": 50000, "release_date": "2026-02-01"},
+            {"track_id": "t3", "track_name": "Mid Song 2", "artist_id": "a3", "artist_name": "Artist 3", "tier": "Mid", "monthly_listeners": 40000, "release_date": "2026-02-01"},
+            # Indie candidates (1k-10k listeners)
+            {"track_id": "t4", "track_name": "Indie Song 1", "artist_id": "a4", "artist_name": "Artist 4", "tier": "Indie", "monthly_listeners": 5000, "release_date": "2026-02-01"},
+            {"track_id": "t5", "track_name": "Indie Song 2", "artist_id": "a5", "artist_name": "Artist 5", "tier": "Indie", "monthly_listeners": 6000, "release_date": "2026-02-01"},
+            {"track_id": "t6", "track_name": "Indie Song 3", "artist_id": "a6", "artist_name": "Artist 6", "tier": "Indie", "monthly_listeners": 7000, "release_date": "2026-02-01"},
+            {"track_id": "t7", "track_name": "Indie Song 4", "artist_id": "a7", "artist_name": "Artist 7", "tier": "Indie", "monthly_listeners": 8000, "release_date": "2026-02-01"},
+            {"track_id": "t8", "track_name": "Indie Song 5", "artist_id": "a8", "artist_name": "Artist 8", "tier": "Indie", "monthly_listeners": 9000, "release_date": "2026-02-01"},
+            # Emerging candidates (<1k listeners)
+            {"track_id": "t9", "track_name": "Emerging Song 1", "artist_id": "a9", "artist_name": "Artist 9", "tier": "Emerging", "monthly_listeners": 500, "release_date": "2026-02-01"},
+            {"track_id": "t10", "track_name": "Emerging Song 2", "artist_id": "a10", "artist_name": "Artist 10", "tier": "Emerging", "monthly_listeners": 600, "release_date": "2026-02-01"},
+            # Duplicate / Restricted ones
+            {"track_id": "duplicate_track_1", "track_name": "Dup Song", "artist_id": "a11", "artist_name": "Artist 11", "tier": "Major", "monthly_listeners": 200000, "release_date": "2026-02-01"},
+            {"track_id": "t12", "track_name": "Recent Artist Song", "artist_id": "recent_artist_id", "artist_name": "Recent", "tier": "Major", "monthly_listeners": 300000, "release_date": "2026-02-01"}
+        ]
+
+        selected = scout.select_weekly_playlist_tracks(candidates)
+
+        # Verify exactly 10 selected
+        self.assertEqual(len(selected), 10)
+
+        # Verify duplicate and recent artist were NOT selected
+        selected_ids = {s["track_id"] for s in selected}
+        self.assertNotIn("duplicate_track_1", selected_ids)
+        self.assertNotIn("t12", selected_ids)
+
+        # Verify exact tier distribution
+        tiers_selected = [s["tier"] for s in selected]
+        self.assertEqual(tiers_selected.count("Major"), 1)
+        self.assertEqual(tiers_selected.count("Mid"), 2)
+        self.assertEqual(tiers_selected.count("Indie"), 5)
+        self.assertEqual(tiers_selected.count("Emerging"), 2)
+
+    @patch('scout.get_spotify_write_token')
+    @patch('scout.discover_punk_candidates')
+    @patch('scout.select_weekly_playlist_tracks')
+    @patch('scout.requests.get')
+    @patch('scout.requests.delete')
+    @patch('scout.requests.post')
+    @patch('scout.supabase')
+    def test_generate_monday_playlist_e2e(self, mock_supabase, mock_post, mock_delete, mock_get_req, mock_select_tracks, mock_discover, mock_get_token):
+        mock_get_token.return_value = "write_token"
+
+        # Mock discovered candidates & select_weekly_playlist_tracks response
+        mock_discover.return_value = []
+        selected_mock = [
+            {"track_id": f"track_{i}", "track_name": f"Song {i}", "artist_id": f"art_{i}", "artist_name": f"Band {i}", "tier": "Indie", "monthly_listeners": 2000, "release_date": "2026-02-01"}
+            for i in range(10)
+        ]
+        mock_select_tracks.return_value = selected_mock
+
+        # Mock GET playlist items (includes one track to prune >84 days)
+        mock_res_get = MagicMock()
+        mock_res_get.status_code = 200
+        mock_res_get.json.return_value = {
+            "items": [
+                {
+                    "added_at": "2025-10-01T12:00:00Z", # Older than 84 days from 2026
+                    "track": {"uri": "spotify:track:prune_1", "name": "Old Song", "artists": [{"name": "Old Band"}]}
+                },
+                {
+                    "added_at": datetime.now().isoformat()[:19] + "Z", # Fresh track
+                    "track": {"uri": "spotify:track:fresh_1", "name": "Fresh Song", "artists": [{"name": "Fresh Band"}]}
+                }
+            ]
+        }
+        mock_get_req.return_value = mock_res_get
+
+        # Mock DELETE and POST requests
+        mock_res_del = MagicMock()
+        mock_res_del.status_code = 200
+        mock_delete.return_value = mock_res_del
+
+        mock_res_post = MagicMock()
+        mock_res_post.status_code = 201
+        mock_post.return_value = mock_res_post
+
+        # Mock database select & inserts for history/artist integration
+        mock_table = MagicMock()
+        mock_supabase.table.return_value = mock_table
+
+        # Mock the existing artists select page
+        mock_select = MagicMock()
+        mock_range = MagicMock()
+        mock_execute = MagicMock()
+        mock_execute.data = [{"name": "Band 0"}] # Band 0 already exists in DB, others are new
+        mock_table.select.return_value = mock_range
+        mock_range.range.return_value = mock_execute
+        mock_execute.execute.return_value = mock_execute
+
+        # Call function
+        scout.generate_monday_playlist()
+
+        # Assertions
+        mock_get_token.assert_called_once()
+        mock_discover.assert_called_once_with("write_token")
+        mock_select_tracks.assert_called_once()
+
+        # Check pruning was triggered with old song uri
+        mock_delete.assert_called_once()
+        self.assertIn("prune_1", mock_delete.call_args[1]["json"]["tracks"][0]["uri"])
+
+        # Check new tracks were posted to position 0
+        mock_post.assert_called_once()
+        self.assertEqual(mock_post.call_args[1]["json"]["position"], 0)
+        self.assertEqual(len(mock_post.call_args[1]["json"]["uris"]), 10)
+
+        # Check history & integration database operations were executed
+        self.assertTrue(mock_table.insert.called)
 
 if __name__ == '__main__':
     unittest.main()
