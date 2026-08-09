@@ -164,6 +164,29 @@ class TestScoutV2(unittest.TestCase):
         self.assertEqual(scout.get_monthly_listeners("artist1"), 167300)
         self.assertEqual(mock_get.call_count, 3) # no new request for cached artist1
 
+    @patch('scout.get_spotify_token')
+    @patch('scout.requests.get')
+    def test_get_monthly_listeners_fallback_to_followers(self, mock_get, mock_get_token):
+        scout._monthly_listeners_cache = {}
+        mock_get_token.return_value = "mock_token"
+
+        # Mock 1: Scrape request returns empty HTML (fails to parse listeners)
+        mock_res_scrape = MagicMock()
+        mock_res_scrape.status_code = 200
+        mock_res_scrape.text = "<html></html>"
+
+        # Mock 2: API request to get followers returns 200 with followers count
+        mock_res_api = MagicMock()
+        mock_res_api.status_code = 200
+        mock_res_api.json.return_value = {
+            "followers": {"total": 45000}
+        }
+
+        mock_get.side_effect = [mock_res_scrape, mock_res_api]
+
+        listeners = scout.get_monthly_listeners("artist_fallback")
+        self.assertEqual(listeners, 45000)
+
     @patch('scout.requests.post')
     @patch.dict('os.environ', {'SPOTIFY_REFRESH_TOKEN': 'test_refresh_token'})
     @patch('scout.SPOTIFY_CLIENT_ID', 'test_id')
