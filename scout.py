@@ -123,6 +123,25 @@ def get_monthly_listeners(artist_id):
     except Exception as e:
         print(f"Error scraping monthly listeners for artist {artist_id}: {e}")
 
+    # Fallback mechanism: fetch the artist's followers count from the official Spotify Web API
+    token = get_spotify_token()
+    if token:
+        try:
+            print(f"Spotify monthly listeners scraping returned 0 for artist {artist_id}. Falling back to fetching followers count from Spotify Web API...")
+            api_url = f"https://api.spotify.com/v1/artists/{artist_id}"
+            api_headers = {"Authorization": f"Bearer {token}"}
+            # Scout V2.0 rule: mandatory 0.5-second delay before all external API calls
+            time.sleep(0.5)
+            api_res = requests.get(api_url, headers=api_headers, timeout=10)
+            if api_res.status_code == 200:
+                artist_data = api_res.json()
+                followers = artist_data.get("followers", {}).get("total", 0)
+                if followers > 0:
+                    _monthly_listeners_cache[artist_id] = followers
+                    return followers
+        except Exception as e:
+            print(f"Error fetching Spotify followers fallback for artist {artist_id}: {e}")
+
     _monthly_listeners_cache[artist_id] = 0
     return 0
 
