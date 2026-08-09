@@ -133,6 +133,7 @@ import streamlit as st
 import textwrap
 import os
 import json
+from datetime import datetime, timedelta
 from supabase import create_client, Client, ClientOptions
 from dotenv import load_dotenv
 
@@ -199,13 +200,23 @@ def fetch_consolidated_data():
         art_res = supabase.table("artists").select("id, name, spotify_id, instagram_url, source_playlist, last_instagram_post_id").eq("is_active", True).execute()
         active_artists = art_res.data if art_res.data else []
 
+        # Fetch weekly playlist additions from playlist_history (added in last 7 days)
+        seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
+        try:
+            pl_res = supabase.table("playlist_history").select("*").gte("added_at", seven_days_ago).order("added_at", desc=True).execute()
+            weekly_playlist = pl_res.data if pl_res.data else []
+        except Exception as pe:
+            print(f"Error fetching playlist history for UI: {pe}")
+            weekly_playlist = []
+
         return {
             "concerts": consolidated,
-            "artists": active_artists
+            "artists": active_artists,
+            "weekly_playlist": weekly_playlist
         }
     except Exception as e:
         st.error(f"Error fetching data: {e}")
-        return {"concerts": [], "artists": []}
+        return {"concerts": [], "artists": [], "weekly_playlist": []}
 
 def main():
     # Check if we should force refresh
@@ -293,6 +304,12 @@ def main():
             showTop: false,
             events: window.concertData.concerts || [],
             allArtists: window.concertData.artists || [],
+            weeklyPlaylist: window.concertData.weekly_playlist || [],
+
+            hasConcert(artistName) {
+                if (!artistName) return false;
+                return this.events.some(e => e.artist.toLowerCase() === artistName.toLowerCase());
+            },
 
             ocrOpen: false,
             ocrArtist: '',
@@ -509,15 +526,17 @@ def main():
 
                 <div class="flex flex-col md:flex-row gap-4 mb-8">
                     <input type="text" x-model="search" placeholder="SEARCH AS YOU TYPE..."
-                           class="w-full md:w-4/12 bg-white text-black border-4 border-black p-4 text-xl md:text-2xl mono focus:outline-none shadow-[4px_4px_0px_0px_rgba(204,255,0,1)]">
+                           class="w-full md:w-3/12 bg-white text-black border-4 border-black p-4 text-xl md:text-2xl mono focus:outline-none shadow-[4px_4px_0px_0px_rgba(204,255,0,1)]">
 
-                    <div class="flex border-4 border-white overflow-hidden w-full md:w-6/12">
+                    <div class="flex flex-wrap border-4 border-white overflow-hidden w-full md:w-7/12">
                         <button @click="viewMode = 'core'" :class="viewMode === 'core' ? 'bg-white text-black' : 'text-white'"
-                                class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all">CORE BANDS</button>
+                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all">CORE BANDS</button>
                         <button @click="viewMode = 'refresh'" :class="viewMode === 'refresh' ? 'bg-acid-lime text-black' : 'text-white'"
-                                class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all border-l-4 border-white">WEEKLY REFRESH</button>
+                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all border-l-2 md:border-l-4 border-white">WEEKLY REFRESH</button>
+                        <button @click="viewMode = 'playlist'" :class="viewMode === 'playlist' ? 'bg-[#FFCC00] text-black' : 'text-white'"
+                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all border-l-2 md:border-l-4 border-white">PUNK IN PROGRESS</button>
                         <button @click="viewMode = 'scan'" :class="viewMode === 'scan' ? 'bg-[#FF5733] text-black' : 'text-white'"
-                                class="flex-1 px-4 md:px-6 py-3 bebas text-xl md:text-2xl transition-all border-l-4 border-white">CONTRIBUTE (SCAN)</button>
+                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all border-l-2 md:border-l-4 border-white">CONTRIBUTE (SCAN)</button>
                     </div>
 
                     <button @click="forceRefresh()"
@@ -527,7 +546,7 @@ def main():
                 </div>
 
                 <!-- City Pills -->
-                <div class="flex flex-wrap gap-2" x-show="viewMode !== 'scan'">
+                <div class="flex flex-wrap gap-2" x-show="viewMode !== 'scan' && viewMode !== 'playlist'">
                     <template x-for="c in cities" :key="c">
                         <div @click="city = c" :class="city === c ? 'active' : ''"
                              class="pill mono text-sm uppercase" x-text="c"></div>
@@ -536,7 +555,7 @@ def main():
             </div>
 
             <!-- Concerts Grid -->
-            <div x-show="viewMode !== 'scan'">
+            <div x-show="viewMode !== 'scan' && viewMode !== 'playlist'">
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                     <template x-for="event in filteredEvents" :key="event.id">
                         <div class="brutal-card p-6 flex flex-col justify-between"
@@ -605,6 +624,67 @@ def main():
                 <!-- Empty State -->
                 <div x-show="filteredEvents.length === 0" class="text-center py-20">
                     <p class="bebas text-4xl opacity-50">NO TOURS FOUND. KEEP REBELLIOUS.</p>
+                </div>
+            </div>
+
+            <!-- Playlist View (Punk in Progress) -->
+            <div x-show="viewMode === 'playlist'" x-cloak class="space-y-8">
+                <!-- Explainer Card -->
+                <div class="bg-[#FFCC00] border-4 border-black p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-black">
+                    <h2 class="bebas text-4xl mb-2 tracking-wide uppercase">🎸 PUNK IN PROGRESS 🎸</h2>
+                    <p class="mono text-sm leading-relaxed">
+                        Weekly emerging and established punk releases curation. Updated every Monday morning with exactly 10 fresh tracks. Sub-12 weeks tracks automatically pruned.
+                    </p>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                    <!-- Embedded Spotify Player -->
+                    <div class="lg:col-span-5 flex flex-col">
+                        <div class="brutal-card bg-black p-2 flex-grow h-[450px]">
+                            <iframe src="https://open.spotify.com/embed/playlist/2ZqhNVOPmA3Nf0SRpzJ9Yz?utm_source=generator" width="100%" height="100%" frameBorder="0" allowfullscreen="" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy" style="border-radius: 0px; min-height: 400px;"></iframe>
+                        </div>
+                    </div>
+
+                    <!-- Weekly Additions Details -->
+                    <div class="lg:col-span-7">
+                        <div class="brutal-card p-6 bg-white text-black">
+                            <h3 class="bebas text-3xl mb-4 uppercase tracking-tight border-b-4 border-black pb-2">🆕 RECENT WEEKLY ADDITIONS</h3>
+
+                            <div class="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+                                <template x-for="track in weeklyPlaylist" :key="track.id">
+                                    <div class="border-2 border-black p-4 bg-gray-50 flex flex-col md:flex-row justify-between items-start md:items-center shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[5px_5px_0px_0px_rgba(0,0,0,1)] transition-all">
+                                        <div>
+                                            <h4 class="bebas text-2xl leading-tight" x-text="track.track_name"></h4>
+                                            <p class="mono text-xs uppercase text-gray-600 mt-1">
+                                                By <span class="font-bold text-black" x-text="track.artist_name"></span>
+                                                &middot; Tier: <span class="font-bold" x-text="track.tier"></span>
+                                                &middot; Monthly Listeners: <span x-text="track.monthly_listeners.toLocaleString()"></span>
+                                            </p>
+
+                                            <!-- Highlighting if Artist has active tours -->
+                                            <template x-if="hasConcert(track.artist_name)">
+                                                <div class="bg-[#CCFF00] text-black font-bold text-[10px] px-2 py-0.5 border border-black uppercase mt-2 inline-block shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                                                    ⚡ TOURING SPAIN/PORTUGAL
+                                                </div>
+                                            </template>
+                                        </div>
+                                        <div class="mt-4 md:mt-0 flex gap-2">
+                                            <a :href="'https://open.spotify.com/track/' + track.track_id" target="_blank"
+                                               class="bg-black text-white px-3 py-1.5 bebas text-sm tracking-wide border-2 border-black hover:bg-[#CCFF00] hover:text-black transition-colors uppercase">Listen</a>
+                                            <a :href="'https://open.spotify.com/artist/' + track.artist_id" target="_blank"
+                                               class="bg-white text-black px-3 py-1.5 bebas text-sm tracking-wide border-2 border-black hover:bg-black hover:text-white transition-colors uppercase">Artist</a>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <template x-if="weeklyPlaylist.length === 0">
+                                    <div class="text-center py-10">
+                                        <p class="mono text-sm text-gray-500 uppercase font-bold">NO ADDITIONS RECORDED IN THE LAST 7 DAYS.</p>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
