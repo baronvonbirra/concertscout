@@ -185,20 +185,25 @@ class TestScoutV2(unittest.TestCase):
         mock_execute = MagicMock()
         mock_execute.data = [{"track_id": "duplicate_track_1"}]
 
-        mock_supabase.table.return_value = mock_select
-        mock_select.select.return_value = mock_range
-        mock_range.range.return_value = mock_execute
-
-        # Mock gte response for recent artist IDs (last 30 days)
         mock_gte = MagicMock()
         mock_recent_execute = MagicMock()
         mock_recent_execute.data = [{"artist_id": "recent_artist_id"}]
-        mock_select.select.return_value = mock_gte
+
+        # Use side_effect to route based on select column to prevent overwriting mocks
+        def select_side_effect(column):
+            if column == "track_id":
+                return mock_range
+            elif column == "artist_id":
+                return mock_gte
+            return MagicMock()
+        mock_select.select.side_effect = select_side_effect
+
+        mock_supabase.table.return_value = mock_select
+        mock_range.range.return_value = mock_execute
+        mock_execute.execute.return_value = mock_execute
+
         mock_gte.gte.return_value = mock_recent_execute
         mock_recent_execute.execute.return_value = mock_recent_execute
-
-        # Set first select mock flow
-        mock_range.execute.return_value = mock_execute
 
         # Candidates to select from
         candidates = [
