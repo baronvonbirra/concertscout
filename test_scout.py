@@ -343,5 +343,75 @@ class TestScoutV2(unittest.TestCase):
         # Check history & integration database operations were executed
         self.assertTrue(mock_table.insert.called)
 
+    @patch('scout.supabase')
+    def test_select_weekly_playlist_tracks_no_artist_repetition(self, mock_supabase):
+        # Setup mock database responses to have no historical tracks/artists
+        mock_select = MagicMock()
+        mock_range = MagicMock()
+        mock_execute = MagicMock()
+        mock_execute.data = []
+
+        mock_gte = MagicMock()
+        mock_recent_execute = MagicMock()
+        mock_recent_execute.data = []
+
+        def select_side_effect(column):
+            if column == "track_id":
+                return mock_range
+            elif column == "artist_id":
+                return mock_gte
+            return MagicMock()
+        mock_select.select.side_effect = select_side_effect
+
+        mock_supabase.table.return_value = mock_select
+        mock_range.range.return_value = mock_execute
+        mock_execute.execute.return_value = mock_execute
+
+        mock_gte.gte.return_value = mock_recent_execute
+        mock_recent_execute.execute.return_value = mock_recent_execute
+
+        # Candidates with multiple songs from the same artist/band to test repetition avoidance
+        candidates = [
+            # Artist 1 has 2 major songs
+            {"track_id": "t1", "track_name": "Major Song 1", "artist_id": "art_1", "artist_name": "Artist 1", "tier": "Major", "monthly_listeners": 150000, "release_date": "2026-02-01"},
+            {"track_id": "t2", "track_name": "Major Song 2", "artist_id": "art_1", "artist_name": "Artist 1", "tier": "Major", "monthly_listeners": 150000, "release_date": "2026-02-01"},
+
+            # Artist 2 has 2 mid songs
+            {"track_id": "t3", "track_name": "Mid Song 1", "artist_id": "art_2", "artist_name": "Artist 2", "tier": "Mid", "monthly_listeners": 50000, "release_date": "2026-02-01"},
+            {"track_id": "t4", "track_name": "Mid Song 2", "artist_id": "art_2", "artist_name": "Artist 2", "tier": "Mid", "monthly_listeners": 50000, "release_date": "2026-02-01"},
+
+            # Additional unique mid, indie, emerging candidates to fulfill requirements
+            {"track_id": "t5", "track_name": "Mid Song 3", "artist_id": "art_3", "artist_name": "Artist 3", "tier": "Mid", "monthly_listeners": 40000, "release_date": "2026-02-01"},
+            {"track_id": "t6", "track_name": "Indie Song 1", "artist_id": "art_4", "artist_name": "Artist 4", "tier": "Indie", "monthly_listeners": 5000, "release_date": "2026-02-01"},
+            {"track_id": "t7", "track_name": "Indie Song 2", "artist_id": "art_5", "artist_name": "Artist 5", "tier": "Indie", "monthly_listeners": 6000, "release_date": "2026-02-01"},
+            {"track_id": "t8", "track_name": "Indie Song 3", "artist_id": "art_6", "artist_name": "Artist 6", "tier": "Indie", "monthly_listeners": 7000, "release_date": "2026-02-01"},
+            {"track_id": "t9", "track_name": "Indie Song 4", "artist_id": "art_7", "artist_name": "Artist 7", "tier": "Indie", "monthly_listeners": 8000, "release_date": "2026-02-01"},
+            {"track_id": "t10", "track_name": "Indie Song 5", "artist_id": "art_8", "artist_name": "Artist 8", "tier": "Indie", "monthly_listeners": 9000, "release_date": "2026-02-01"},
+            {"track_id": "t11", "track_name": "Emerging Song 1", "artist_id": "art_9", "artist_name": "Artist 9", "tier": "Emerging", "monthly_listeners": 500, "release_date": "2026-02-01"},
+            {"track_id": "t12", "track_name": "Emerging Song 2", "artist_id": "art_10", "artist_name": "Artist 10", "tier": "Emerging", "monthly_listeners": 600, "release_date": "2026-02-01"},
+            # Extra unique candidates to ensure we have enough unique artists when testing exclusion
+            {"track_id": "t13", "track_name": "Extra Major Song", "artist_id": "art_11", "artist_name": "Artist 11", "tier": "Major", "monthly_listeners": 120000, "release_date": "2026-02-01"},
+            {"track_id": "t14", "track_name": "Extra Indie Song", "artist_id": "art_12", "artist_name": "Artist 12", "tier": "Indie", "monthly_listeners": 4000, "release_date": "2026-02-01"},
+        ]
+
+        # 1. Test no repetition in the current selection run
+        selected = scout.select_weekly_playlist_tracks(candidates)
+        self.assertEqual(len(selected), 10)
+        selected_artist_ids = [s["artist_id"] for s in selected]
+        # Check that all selected artists are unique (no duplicates in selection)
+        self.assertEqual(len(selected_artist_ids), len(set(selected_artist_ids)))
+
+        # 2. Test no repetition of artists already in the existing playlist
+        existing_artists = {"art_1", "art_4"}  # Artist 1 (Major) and Artist 4 (Indie) are already on the playlist
+        selected_with_existing = scout.select_weekly_playlist_tracks(candidates, existing_playlist_artists=existing_artists)
+        self.assertEqual(len(selected_with_existing), 10)
+        selected_artist_ids_with_existing = [s["artist_id"] for s in selected_with_existing]
+
+        # Check that none of the selected tracks are from art_1 or art_4
+        self.assertNotIn("art_1", selected_artist_ids_with_existing)
+        self.assertNotIn("art_4", selected_artist_ids_with_existing)
+        # Check that all chosen artists are unique
+        self.assertEqual(len(selected_artist_ids_with_existing), len(set(selected_artist_ids_with_existing)))
+
 if __name__ == '__main__':
     unittest.main()

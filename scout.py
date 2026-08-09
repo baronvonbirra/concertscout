@@ -305,7 +305,37 @@ def discover_punk_candidates(token):
 
     return classified_candidates
 
-def select_weekly_playlist_tracks(candidates):
+def sample_unique_artists(candidates_list, count, unavailable_artists):
+    """
+    Filters candidates_list to exclude any candidate whose artist_id is in unavailable_artists.
+    Groups the remaining candidates by artist_id, randomly samples up to `count` unique artists,
+    selects a random track for each chosen artist, and adds those artists to unavailable_artists.
+    """
+    eligible = [c for c in candidates_list if c["artist_id"] not in unavailable_artists]
+
+    by_artist = {}
+    for c in eligible:
+        aid = c["artist_id"]
+        if aid not in by_artist:
+            by_artist[aid] = []
+        by_artist[aid].append(c)
+
+    artists_available = list(by_artist.keys())
+    selected_tracks = []
+
+    if len(artists_available) >= count:
+        selected_artists = random.sample(artists_available, count)
+    else:
+        selected_artists = artists_available
+
+    for aid in selected_artists:
+        track = random.choice(by_artist[aid])
+        selected_tracks.append(track)
+        unavailable_artists.add(aid)
+
+    return selected_tracks
+
+def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None):
     print("--- Selecting Tracks for Weekly Discovery Playlist ---")
     if not candidates:
         print("Warning: No candidates found.")
@@ -341,6 +371,11 @@ def select_weekly_playlist_tracks(candidates):
         except Exception as e:
             print(f"Error querying playlist history from database: {e}")
 
+    # Track unavailable artists (already on playlist or already selected in current run)
+    unavailable_artists = set()
+    if existing_playlist_artists:
+        unavailable_artists.update(existing_playlist_artists)
+
     # Filter candidates
     eligible_candidates = []
     for c in candidates:
@@ -349,6 +384,9 @@ def select_weekly_playlist_tracks(candidates):
             continue
         if c["artist_id"] in recent_artist_ids:
             # Artist 30 days repeat cap
+            continue
+        if c["artist_id"] in unavailable_artists:
+            # Already on the playlist
             continue
         eligible_candidates.append(c)
 
@@ -379,47 +417,35 @@ def select_weekly_playlist_tracks(candidates):
         candidates_in_tier = list(tiers_map[tier])
         print(f"Tier {tier}: Found {len(candidates_in_tier)} candidates. Need {count}.")
 
-        # If we have enough, we randomly sample
-        if len(candidates_in_tier) >= count:
-            selected = random.sample(candidates_in_tier, count)
-            selected_tracks.extend(selected)
-        else:
-            print(f"Warning: Not enough candidates in Tier {tier}. Relaxation logic triggered.")
-            # relaxation step 1: allow artists featured in last 30 days (but still no track duplicates)
-            relaxed_candidates = [c for c in candidates if c["tier"] == tier and c["track_id"] not in historical_track_ids]
-            # De-duplicate artist within this list to prevent selecting same artist twice in same week
-            seen_artists_this_week = set()
-            clean_relaxed = []
-            for c in relaxed_candidates:
-                if c["artist_id"] not in seen_artists_this_week:
-                    clean_relaxed.append(c)
-                    seen_artists_this_week.add(c["artist_id"])
+        # Sample unique artists from the eligible ones in this tier
+        tier_selected = sample_unique_artists(candidates_in_tier, count, unavailable_artists)
+        selected_tracks.extend(tier_selected)
 
-            if len(clean_relaxed) >= count:
-                selected = random.sample(clean_relaxed, count)
-                selected_tracks.extend(selected)
+        if len(tier_selected) < count:
+            needed = count - len(tier_selected)
+            print(f"Warning: Not enough candidates in Tier {tier}. Relaxation logic triggered. Still need {needed}.")
+            # relaxation step 1: allow artists featured in last 30 days (but still no track duplicates, and no repeat of already unavailable/selected artists)
+            relaxed_candidates = [c for c in candidates if c["tier"] == tier and c["track_id"] not in historical_track_ids and c["artist_id"] not in unavailable_artists]
+
+            relaxed_selected = sample_unique_artists(relaxed_candidates, needed, unavailable_artists)
+            selected_tracks.extend(relaxed_selected)
+
+            if len(relaxed_selected) == needed:
                 print(f"Successfully fulfilled Tier {tier} count using relaxed artist-cap criteria.")
             else:
-                # relaxation step 2: take whatever we can find in this tier, and if still short, fill from other tiers to ensure exactly 10 tracks
-                selected_tracks.extend(clean_relaxed)
-                print(f"Warning: Could only find {len(clean_relaxed)} total tracks for Tier {tier} after relaxation.")
+                print(f"Warning: Could only find {len(tier_selected) + len(relaxed_selected)} total tracks for Tier {tier} after relaxation.")
 
     # If we are STILL short of exactly 10 tracks, we must pad from other tiers to reach exactly 10 (maintaining DoD count)
     total_needed = 10
     if len(selected_tracks) < total_needed:
         still_needed = total_needed - len(selected_tracks)
         print(f"Warning: Selection has {len(selected_tracks)} tracks. Padding {still_needed} tracks from any available tier...")
-        # Get any candidates that are not currently selected or in historical track ids
+        # Get any candidates that are not currently selected or in historical track ids, and not in unavailable_artists
         already_selected_ids = {s["track_id"] for s in selected_tracks}
-        pad_candidates = [c for c in candidates if c["track_id"] not in historical_track_ids and c["track_id"] not in already_selected_ids]
+        pad_candidates = [c for c in candidates if c["track_id"] not in historical_track_ids and c["track_id"] not in already_selected_ids and c["artist_id"] not in unavailable_artists]
 
-        # Randomly select padding candidates
-        if len(pad_candidates) >= still_needed:
-            padded = random.sample(pad_candidates, still_needed)
-            selected_tracks.extend(padded)
-        else:
-            # Last resort: just use any pad candidates we can get
-            selected_tracks.extend(pad_candidates)
+        padded = sample_unique_artists(pad_candidates, still_needed, unavailable_artists)
+        selected_tracks.extend(padded)
 
     # Ensure exactly 10 tracks!
     selected_tracks = selected_tracks[:10]
@@ -453,23 +479,13 @@ def generate_monday_playlist():
         print(f"Error during candidate discovery: {e}")
         return
 
-    # 3. Track selection
-    try:
-        selected = select_weekly_playlist_tracks(candidates)
-    except Exception as e:
-        print(f"Error during track selection: {e}")
-        return
-
-    if not selected:
-        print("Warning: No tracks were selected. Exiting playlist generation.")
-        return
-
     playlist_id = "2ZqhNVOPmA3Nf0SRpzJ9Yz"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    # 4. Playlist Pruning (> 84 days old)
-    print("Checking playlist tracks for pruning (>84 days old)...")
+    # 3. Playlist Pruning check & gather active artists already in playlist
+    print("Checking playlist tracks for pruning (>84 days old) and current artists...")
     tracks_to_prune = []
+    existing_playlist_artists = set()
     try:
         url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
         time.sleep(0.5)
@@ -488,12 +504,30 @@ def generate_monday_playlist():
                         if added_at < cutoff_date:
                             print(f"Pruning: Track '{track.get('name')}' by '{track.get('artists')[0].get('name') if track.get('artists') else 'Unknown'}' is older than 84 days (Added: {added_at_str}).")
                             tracks_to_prune.append({"uri": track_uri})
+                        else:
+                            # Keep track of active artists already in the playlist
+                            artists = track.get("artists", [])
+                            if artists:
+                                primary_artist_id = artists[0].get("id")
+                                if primary_artist_id:
+                                    existing_playlist_artists.add(primary_artist_id)
                     except Exception as pe:
                         print(f"Error parsing added_at date '{added_at_str}': {pe}")
         else:
-            print(f"Warning: Could not fetch playlist items for pruning. Status: {res.status_code}")
+            print(f"Warning: Could not fetch playlist items for pruning/artist tracking. Status: {res.status_code}")
     except Exception as e:
         print(f"Error during playlist pruning check: {e}")
+
+    # 4. Track selection
+    try:
+        selected = select_weekly_playlist_tracks(candidates, existing_playlist_artists=existing_playlist_artists)
+    except Exception as e:
+        print(f"Error during track selection: {e}")
+        return
+
+    if not selected:
+        print("Warning: No tracks were selected. Exiting playlist generation.")
+        return
 
     # Delete pruned tracks if any
     if tracks_to_prune:
