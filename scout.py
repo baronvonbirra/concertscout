@@ -52,7 +52,7 @@ _spotify_token_cache = {"token": None, "expires_at": 0}
 def get_spotify_write_token():
     refresh_token = os.environ.get("SPOTIFY_REFRESH_TOKEN")
     if not refresh_token:
-        print("Warning: SPOTIFY_REFRESH_TOKEN not found in environment. Falling back to client credentials...")
+        print("Warning: SPOTIFY_REFRESH_TOKEN not found in environment. Falling back to client credentials (this token cannot modify playlists)...")
         return get_spotify_token()
 
     now = time.time()
@@ -68,15 +68,17 @@ def get_spotify_write_token():
                 "refresh_token": refresh_token
             }
         else:
-            print("Error: Spotify Client ID or Secret not set. Cannot use refresh token flow.")
+            print("Error: Spotify Client ID or Secret not set. Cannot use refresh token flow. Falling back to client credentials (this token cannot modify playlists)...")
             return get_spotify_token()
 
         res = requests.post(url, data=data, headers=headers, timeout=10)
+        if res.status_code != 200:
+            print(f"Error: Spotify token refresh failed with status code {res.status_code}. Response body: {res.text}")
         res.raise_for_status()
         res_data = res.json()
         return res_data.get("access_token")
     except Exception as e:
-        print(f"Error refreshing Spotify user token: {e}. Falling back to client credentials...")
+        print(f"Error refreshing Spotify user token: {e}. Falling back to client credentials (this token cannot modify playlists)...")
         return get_spotify_token()
 
 def get_monthly_listeners(artist_id):
@@ -416,6 +418,14 @@ def generate_monday_playlist():
     if not token:
         print("Error: Could not obtain Spotify access token.")
         return
+
+    # Check if we fell back to client credentials
+    if token == get_spotify_token():
+        print("\n" + "="*80)
+        print("⚠️  WARNING: The obtained Spotify token is a Client Credentials token (not a User Write Token).")
+        print("Playlist modifications (adding/pruning tracks) will fail with 401/403 errors")
+        print("because Client Credentials cannot write to playlists. Please configure a valid SPOTIFY_REFRESH_TOKEN.")
+        print("="*80 + "\n")
 
     # 2. Discover candidates
     try:
