@@ -274,8 +274,10 @@ def sample_unique_artists(candidates_list, count, unavailable_artists):
 
     return selected_tracks
 
-def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, current_week="W33"):
-    print("--- Selecting Tracks for Weekly Discovery Playlist (Phase 2 Spec) ---")
+def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, current_week=None):
+    if not current_week:
+        current_week = f"W{datetime.now().isocalendar()[1]}"
+    print(f"--- Selecting Tracks for Weekly Discovery Playlist ({current_week} Phase 2 Spec) ---")
     if not candidates:
         print("Warning: No candidates found.")
         return []
