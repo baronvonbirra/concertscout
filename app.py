@@ -156,9 +156,25 @@ supabase = get_supabase_client()
 @st.cache_data(ttl=3600)
 def fetch_consolidated_data():
     if not supabase:
-        return {"concerts": [], "artists": []}
+        return {"concerts": [], "artists": [], "weekly_playlist": [], "tour_events": [], "weekly_submissions": []}
 
     try:
+        # Fetch tour_events for Phase 3 display
+        tour_events = []
+        try:
+            te_res = supabase.table("tour_events").select("*").order("event_date", desc=False).execute()
+            tour_events = te_res.data if te_res.data else []
+        except Exception as te_e:
+            print(f"Error fetching tour_events: {te_e}")
+
+        # Fetch weekly submissions for Phase 1 display
+        weekly_submissions = []
+        try:
+            ws_res = supabase.table("weekly_submissions").select("*").order("created_at", desc=True).execute()
+            weekly_submissions = ws_res.data if ws_res.data else []
+        except Exception as ws_e:
+            print(f"Error fetching weekly_submissions: {ws_e}")
+
         # Fetch concerts joined with artist details
         res = supabase.table("concerts").select("*, artists(id, name, spotify_id, instagram_url, lastfm_url, source_playlist, is_active, last_instagram_post_id)").execute()
         concerts_list = res.data if res.data else []
@@ -212,11 +228,13 @@ def fetch_consolidated_data():
         return {
             "concerts": consolidated,
             "artists": active_artists,
-            "weekly_playlist": weekly_playlist
+            "weekly_playlist": weekly_playlist,
+            "tour_events": tour_events,
+            "weekly_submissions": weekly_submissions
         }
     except Exception as e:
         st.error(f"Error fetching data: {e}")
-        return {"concerts": [], "artists": [], "weekly_playlist": []}
+        return {"concerts": [], "artists": [], "weekly_playlist": [], "tour_events": [], "weekly_submissions": []}
 
 def main():
     # Check if we should force refresh
@@ -300,15 +318,208 @@ def main():
         <div x-data="{
             search: '',
             city: 'All',
-            viewMode: 'core',
+            viewMode: 'tours',
             showTop: false,
             events: window.concertData.concerts || [],
             allArtists: window.concertData.artists || [],
             weeklyPlaylist: window.concertData.weekly_playlist || [],
+            tourEvents: window.concertData.tour_events || [],
+            weeklySubmissions: window.concertData.weekly_submissions || [],
+
+            // Admin Panel State
+            adminAuth: false,
+            adminPasswordInput: '',
+            adminError: '',
+            adminSubmitting: false,
+            adminSuccess: false,
+            subWeek: 'W33',
+            subBandName: '',
+            subDirectViews: 0,
+            subIndirectViews: 0,
+            subTotalSaves: 0,
+            subInteractionType: 'none',
+            subNotes: '',
+            bulkCsv: '',
+            bulkMode: false,
+
+            get currentScore() {
+                const type = this.subInteractionType;
+                if (type === 'liked+shared+thanked') return 3;
+                if (type === 'liked+shared') return 2;
+                if (['liked', 'shared', 'thanked'].includes(type)) return 1;
+                return 0;
+            },
+
+            get currentShared() {
+                return this.subInteractionType.includes('shared');
+            },
+
+            verifyAdminPassword() {
+                if (this.adminPasswordInput.trim() === 'punk2026' || window.location.search.includes('pwd=punk2026')) {
+                    this.adminAuth = true;
+                    this.adminError = '';
+                } else {
+                    this.adminError = 'Invalid password!';
+                }
+            },
+
+            calcScore(type) {
+                if (type === 'liked+shared+thanked') return 3;
+                if (type === 'liked+shared') return 2;
+                if (['liked', 'shared', 'thanked'].includes(type)) return 1;
+                return 0;
+            },
+
+            async submitSingle() {
+                if (!this.subBandName.trim()) {
+                    alert('Band name is required!');
+                    return;
+                }
+                this.adminSubmitting = true;
+                this.adminSuccess = false;
+
+                const payload = {
+                    week: this.subWeek,
+                    band_name: this.subBandName.trim(),
+                    direct_views: parseInt(this.subDirectViews) || 0,
+                    indirect_views: parseInt(this.subIndirectViews) || 0,
+                    total_saves: parseInt(this.subTotalSaves) || 0,
+                    interaction_type: this.subInteractionType,
+                    interaction_score: this.calcScore(this.subInteractionType),
+                    shared: this.subInteractionType.includes('shared'),
+                    notes: this.subNotes || null
+                };
+
+                try {
+                    const res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
+                        method: 'POST',
+                        headers: {
+                            'apikey': '__SUPABASE_KEY__',
+                            'Authorization': 'Bearer __SUPABASE_KEY__',
+                            'Content-Type': 'application/json',
+                            'Prefer': 'return=representation'
+                        },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!res.ok) throw new Error('Failed to submit');
+
+                    // Upsert into band_registry
+                    await fetch('__SUPABASE_URL__/rest/v1/band_registry', {
+                        method: 'POST',
+                        headers: {
+                            'apikey': '__SUPABASE_KEY__',
+                            'Authorization': 'Bearer __SUPABASE_KEY__',
+                            'Content-Type': 'application/json',
+                            'Prefer': 'resolution=merge-duplicates'
+                        },
+                        body: JSON.stringify({
+                            band_name: this.subBandName.trim(),
+                            last_used_in_playlist: this.subWeek
+                        })
+                    });
+
+                    this.adminSuccess = true;
+                    this.adminSubmitting = false;
+                    this.subBandName = '';
+                    this.subDirectViews = 0;
+                    this.subIndirectViews = 0;
+                    this.subTotalSaves = 0;
+                    this.subNotes = '';
+                    setTimeout(() => this.forceRefresh(), 1200);
+                } catch (e) {
+                    alert('Error submitting: ' + e.message);
+                    this.adminSubmitting = false;
+                }
+            },
+
+            async submitBulk() {
+                if (!this.bulkCsv.trim()) {
+                    alert('Bulk CSV text is required!');
+                    return;
+                }
+                this.adminSubmitting = true;
+
+                const lines = this.bulkCsv.trim().split('\n');
+                const items = [];
+                const bandRegistryItems = [];
+
+                for (let line of lines) {
+                    if (!line.trim() || line.startsWith('Week,')) continue;
+                    const parts = line.split(',').map(p => p.trim());
+                    if (parts.length < 2) continue;
+
+                    const week = parts[0] || this.subWeek;
+                    const band_name = parts[1];
+                    const direct_views = parseInt(parts[2]) || 0;
+                    const indirect_views = parseInt(parts[3]) || 0;
+                    const total_saves = parseInt(parts[4]) || 0;
+                    const interaction_type = parts[5] || 'none';
+                    const notes = parts[6] || null;
+
+                    items.push({
+                        week,
+                        band_name,
+                        direct_views,
+                        indirect_views,
+                        total_saves,
+                        interaction_type,
+                        interaction_score: this.calcScore(interaction_type),
+                        shared: interaction_type.includes('shared'),
+                        notes
+                    });
+
+                    bandRegistryItems.push({
+                        band_name,
+                        last_used_in_playlist: week
+                    });
+                }
+
+                if (items.length === 0) {
+                    alert('No valid rows found to import.');
+                    this.adminSubmitting = false;
+                    return;
+                }
+
+                try {
+                    const res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
+                        method: 'POST',
+                        headers: {
+                            'apikey': '__SUPABASE_KEY__',
+                            'Authorization': 'Bearer __SUPABASE_KEY__',
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(items)
+                    });
+
+                    if (!res.ok) throw new Error('Bulk insert failed');
+
+                    // Upsert into band_registry
+                    await fetch('__SUPABASE_URL__/rest/v1/band_registry', {
+                        method: 'POST',
+                        headers: {
+                            'apikey': '__SUPABASE_KEY__',
+                            'Authorization': 'Bearer __SUPABASE_KEY__',
+                            'Content-Type': 'application/json',
+                            'Prefer': 'resolution=merge-duplicates'
+                        },
+                        body: JSON.stringify(bandRegistryItems)
+                    });
+
+                    this.adminSuccess = true;
+                    this.adminSubmitting = false;
+                    this.bulkCsv = '';
+                    setTimeout(() => this.forceRefresh(), 1200);
+                } catch (e) {
+                    alert('Error bulk saving: ' + e.message);
+                    this.adminSubmitting = false;
+                }
+            },
 
             hasConcert(artistName) {
                 if (!artistName) return false;
-                return this.events.some(e => e.artist.toLowerCase() === artistName.toLowerCase());
+                return this.events.some(e => e.artist.toLowerCase() === artistName.toLowerCase()) ||
+                       this.tourEvents.some(t => t.band_name.toLowerCase() === artistName.toLowerCase());
             },
 
             ocrOpen: false,
@@ -529,14 +740,14 @@ def main():
                            class="w-full md:w-3/12 bg-white text-black border-4 border-black p-4 text-xl md:text-2xl mono focus:outline-none shadow-[4px_4px_0px_0px_rgba(204,255,0,1)]">
 
                     <div class="flex flex-wrap border-4 border-white overflow-hidden w-full md:w-7/12">
-                        <button @click="viewMode = 'core'" :class="viewMode === 'core' ? 'bg-white text-black' : 'text-white'"
-                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all">CORE BANDS</button>
-                        <button @click="viewMode = 'refresh'" :class="viewMode === 'refresh' ? 'bg-acid-lime text-black' : 'text-white'"
-                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all border-l-2 md:border-l-4 border-white">WEEKLY REFRESH</button>
+                        <button @click="viewMode = 'tours'" :class="viewMode === 'tours' ? 'bg-[#CCFF00] text-black' : 'text-white'"
+                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all">🎸 UPCOMING TOURS</button>
                         <button @click="viewMode = 'playlist'" :class="viewMode === 'playlist' ? 'bg-[#FFCC00] text-black' : 'text-white'"
                                 class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all border-l-2 md:border-l-4 border-white">PUNK IN PROGRESS</button>
-                        <button @click="viewMode = 'scan'" :class="viewMode === 'scan' ? 'bg-[#FF5733] text-black' : 'text-white'"
-                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all border-l-2 md:border-l-4 border-white">CONTRIBUTE (SCAN)</button>
+                        <button @click="viewMode = 'admin'" :class="viewMode === 'admin' ? 'bg-[#FF5733] text-black' : 'text-white'"
+                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all border-l-2 md:border-l-4 border-white">ADMIN PANEL</button>
+                        <button @click="viewMode = 'scan'" :class="viewMode === 'scan' ? 'bg-white text-black' : 'text-white'"
+                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all border-l-2 md:border-l-4 border-white">SCAN POSTERS</button>
                     </div>
 
                     <button @click="forceRefresh()"
@@ -554,76 +765,166 @@ def main():
                 </div>
             </div>
 
-            <!-- Concerts Grid -->
-            <div x-show="viewMode !== 'scan' && viewMode !== 'playlist'">
+            <!-- Upcoming Tours Section (Phase 3) -->
+            <div x-show="viewMode === 'tours'">
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                    <template x-for="event in filteredEvents" :key="event.id">
-                        <div class="brutal-card p-6 flex flex-col justify-between"
-                             :class="{
-                                'safety-orange': event.is_core,
-                                '!border-[#CCFF00] !border-8': isNew(event.created_at)
-                             }">
+                    <template x-for="tour in tourEvents.filter(t => (city === 'All' || t.city === city) && (t.band_name.toLowerCase().includes(search.toLowerCase()) || t.venue.toLowerCase().includes(search.toLowerCase())))" :key="tour.id">
+                        <div class="brutal-card p-6 flex flex-col justify-between border-4 border-black bg-white text-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
                             <div>
                                 <div class="flex justify-between items-start mb-4">
-                                    <div class="flex gap-2">
-                                        <span x-show="isNew(event.created_at)" class="bg-[#CCFF00] text-black px-2 py-1 text-xs mono font-bold">NEW</span>
-                                        <span x-show="event.is_core" class="bg-[#FF5733] text-white px-2 py-1 text-xs mono">CORE</span>
-                                        <span x-show="!event.is_core" class="bg-black text-white px-2 py-1 text-xs mono">WEEKLY</span>
-                                    </div>
-
-                                    <!-- Andalusia Map Mini-Thumb -->
-                                    <div class="w-12 h-12 relative">
-                                        <template x-if="['Málaga', 'Jerez'].includes(event.city)">
-                                            <svg viewBox="0 0 100 60" class="w-full h-full opacity-30">
-                                                <path d="M5,45 L20,55 L80,55 L95,45 L95,15 L70,5 L20,5 L5,15 Z" fill="none" stroke="black" stroke-width="2" />
-                                                <circle :cx="event.city === 'Málaga' ? 60 : 25" :cy="event.city === 'Málaga' ? 45 : 45" r="5" fill="#E60000" />
-                                            </svg>
-                                        </template>
-                                        <template x-if="!['Málaga', 'Jerez'].includes(event.city)">
-                                            <svg viewBox="0 0 24 24" class="w-full h-full opacity-20" fill="none" stroke="black" stroke-width="2">
-                                                <circle cx="12" cy="12" r="10" />
-                                                <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-                                            </svg>
-                                        </template>
-                                    </div>
+                                    <span class="bg-[#CCFF00] text-black px-2 py-1 text-xs mono font-bold border border-black uppercase" x-text="tour.country"></span>
+                                    <span class="mono text-xs opacity-60" x-text="tour.source || 'last.fm'"></span>
                                 </div>
 
-                                <h2 class="bebas text-4xl mb-2 leading-none" x-text="event.artist"></h2>
+                                <h2 class="bebas text-4xl mb-2 leading-none" x-text="tour.band_name"></h2>
                                 <div class="mono text-sm mb-4 uppercase">
-                                    <span class="font-bold" x-text="event.city"></span> @ <span x-text="event.venue"></span>
+                                    <span class="font-bold" x-text="tour.city"></span> @ <span x-text="tour.venue"></span>
                                 </div>
 
-                                <div class="bg-black text-white inline-block px-3 py-1 mono text-lg mb-4" x-text="event.date"></div>
+                                <div class="bg-black text-white inline-block px-3 py-1 mono text-lg mb-4" x-text="tour.event_date"></div>
                             </div>
 
                             <div class="mt-6 flex flex-col gap-2">
-                                <div class="flex gap-2 w-full">
-                                    <a :href="event.ticket_url || '#'" target="_blank"
-                                       class="bg-black text-white px-4 py-2 bebas text-xl hover:bg-acid-lime hover:text-black transition-colors border-2 border-black flex-1 text-center">GET TICKETS</a>
-
-                                    <template x-if="event.spotify_id">
-                                        <a :href="'https://open.spotify.com/artist/' + event.spotify_id" target="_blank"
-                                           class="bg-[#1DB954] text-white px-4 py-2 font-bold hover:bg-white hover:text-black transition-colors border-2 border-black text-center">SPOTIFY</a>
-                                    </template>
-
-                                    <template x-if="event.instagram_url">
-                                        <a :href="event.instagram_url" target="_blank"
-                                           class="bg-[#E1306C] text-white px-4 py-2 font-bold hover:bg-white hover:text-black transition-colors border-2 border-black text-center">INSTAGRAM</a>
-                                    </template>
-                                </div>
-                                <button @click="openOcrModal(event.artist, event.artist_id, event.instagram_url, event.last_instagram_post_id)"
-                                        class="w-full bg-[#121212] text-[#CCFF00] hover:bg-[#CCFF00] hover:text-black py-2 border-2 border-black font-bold text-xs tracking-wider transition-all uppercase">
-                                    Scan IG Story/Feed
-                                </button>
-                                <span class="mono text-[10px] opacity-50 self-end" x-text="'ID: ' + event.id"></span>
+                                <a :href="tour.last_fm_url || '#'" target="_blank"
+                                   class="bg-black text-white px-4 py-2 bebas text-xl hover:bg-[#CCFF00] hover:text-black transition-colors border-2 border-black text-center uppercase">GET TICKETS</a>
                             </div>
                         </div>
                     </template>
                 </div>
 
-                <!-- Empty State -->
-                <div x-show="filteredEvents.length === 0" class="text-center py-20">
-                    <p class="bebas text-4xl opacity-50">NO TOURS FOUND. KEEP REBELLIOUS.</p>
+                <!-- Empty State for Tours -->
+                <div x-show="tourEvents.length === 0" class="text-center py-20">
+                    <p class="bebas text-4xl opacity-50">NO UPCOMING TOURS IN SPAIN / PORTUGAL. STAY REBELLIOUS.</p>
+                </div>
+            </div>
+
+            <!-- Admin Panel Section (Phase 1) -->
+            <div x-show="viewMode === 'admin'" x-cloak>
+                <div class="mb-8 bg-[#FF5733] border-4 border-black p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-black">
+                    <h2 class="bebas text-4xl mb-2 tracking-wide uppercase">⚡ DIY PUNK ADMIN DASHBOARD ⚡</h2>
+                    <p class="mono text-sm leading-relaxed">
+                        Submit weekly band performance data. Pre-calculated interaction scores & derive derived flags with zero human error.
+                    </p>
+                </div>
+
+                <!-- Password Check Panel -->
+                <div x-show="!adminAuth" class="brutal-card p-8 bg-white text-black max-w-md mx-auto">
+                    <h3 class="bebas text-3xl mb-4 uppercase">ENTER PASSWORD</h3>
+                    <input type="password" x-model="adminPasswordInput" @keydown.enter="verifyAdminPassword()" placeholder="Password..."
+                           class="w-full bg-white border-4 border-black p-3 text-lg mono focus:outline-none mb-4">
+                    <button @click="verifyAdminPassword()"
+                            class="w-full bg-[#CCFF00] text-black font-bold border-4 border-black p-3 text-xl bebas tracking-wide hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all uppercase">
+                        LOGIN
+                    </button>
+                    <p x-show="adminError" class="text-red-600 font-bold mono text-sm mt-3" x-text="adminError"></p>
+                </div>
+
+                <!-- Authenticated Admin Forms -->
+                <div x-show="adminAuth" class="space-y-8">
+                    <!-- Toggle Single vs Bulk -->
+                    <div class="flex gap-4">
+                        <button @click="bulkMode = false" :class="!bulkMode ? 'bg-[#CCFF00] text-black' : 'bg-black text-white'" class="px-6 py-2 bebas text-2xl border-4 border-black">SINGLE SUBMISSION</button>
+                        <button @click="bulkMode = true" :class="bulkMode ? 'bg-[#CCFF00] text-black' : 'bg-black text-white'" class="px-6 py-2 bebas text-2xl border-4 border-black">BULK CSV IMPORT</button>
+                    </div>
+
+                    <!-- Single Submission Form -->
+                    <div x-show="!bulkMode" class="brutal-card p-6 bg-white text-black">
+                        <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase">WEEKLY SUBMISSION FORM</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block font-bold text-xs uppercase mb-1">WEEK (e.g. W33):</label>
+                                <input type="text" x-model="subWeek" class="w-full border-2 border-black p-2 mono text-sm">
+                            </div>
+                            <div>
+                                <label class="block font-bold text-xs uppercase mb-1">BAND NAME:</label>
+                                <input type="text" x-model="subBandName" class="w-full border-2 border-black p-2 mono text-sm">
+                            </div>
+                            <div>
+                                <label class="block font-bold text-xs uppercase mb-1">DIRECT VIEWS:</label>
+                                <input type="number" x-model="subDirectViews" class="w-full border-2 border-black p-2 mono text-sm">
+                            </div>
+                            <div>
+                                <label class="block font-bold text-xs uppercase mb-1">INDIRECT VIEWS:</label>
+                                <input type="number" x-model="subIndirectViews" class="w-full border-2 border-black p-2 mono text-sm">
+                            </div>
+                            <div>
+                                <label class="block font-bold text-xs uppercase mb-1">TOTAL SAVES:</label>
+                                <input type="number" x-model="subTotalSaves" class="w-full border-2 border-black p-2 mono text-sm">
+                            </div>
+                            <div>
+                                <label class="block font-bold text-xs uppercase mb-1">INTERACTION TYPE:</label>
+                                <select x-model="subInteractionType" class="w-full border-2 border-black p-2 mono text-sm font-bold">
+                                    <option value="none">none (Score: 0)</option>
+                                    <option value="liked">liked (Score: 1)</option>
+                                    <option value="shared">shared (Score: 1)</option>
+                                    <option value="liked+shared">liked+shared (Score: 2)</option>
+                                    <option value="thanked">thanked (Score: 1)</option>
+                                    <option value="liked+shared+thanked">liked+shared+thanked (Score: 3)</option>
+                                </select>
+                            </div>
+                            <div class="md:col-span-2">
+                                <label class="block font-bold text-xs uppercase mb-1">NOTES (OPTIONAL):</label>
+                                <input type="text" x-model="subNotes" placeholder="e.g. repeat/special case..." class="w-full border-2 border-black p-2 mono text-sm">
+                            </div>
+                        </div>
+
+                        <!-- Score Preview -->
+                        <div class="mt-4 p-3 bg-gray-100 border-2 border-black flex justify-between items-center mono text-sm">
+                            <span>AUTO-CALCULATED SCORE: <strong x-text="currentScore"></strong></span>
+                            <span>DERIVED SHARED: <strong x-text="currentShared ? 'YES' : 'NO'"></strong></span>
+                        </div>
+
+                        <button @click="submitSingle()" :disabled="adminSubmitting"
+                                class="w-full bg-[#CCFF00] text-black font-bold border-4 border-black p-4 mt-6 text-xl bebas tracking-wider hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all uppercase">
+                            SAVE SUBMISSION
+                        </button>
+                    </div>
+
+                    <!-- Bulk Import Form -->
+                    <div x-show="bulkMode" class="brutal-card p-6 bg-white text-black">
+                        <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase">BULK CSV PASTE IMPORT</h3>
+                        <p class="mono text-xs mb-2">Paste CSV rows in format: <code>Week,Band_Name,Direct_Views,Indirect_Views,Total_Saves,Interaction_Type,Notes</code></p>
+                        <textarea x-model="bulkCsv" rows="6" placeholder="W33, Band Name, 100, 50, 10, liked+shared, Note text..." class="w-full border-2 border-black p-3 mono text-xs focus:outline-none"></textarea>
+                        <button @click="submitBulk()" :disabled="adminSubmitting"
+                                class="w-full bg-[#CCFF00] text-black font-bold border-4 border-black p-4 mt-4 text-xl bebas tracking-wider hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all uppercase">
+                            PROCESS BULK IMPORT
+                        </button>
+                    </div>
+
+                    <p x-show="adminSuccess" class="p-3 bg-green-200 border-2 border-green-800 text-green-900 font-bold mono text-center">Success! Data saved.</p>
+
+                    <!-- Submission Log Table -->
+                    <div class="brutal-card p-6 bg-white text-black overflow-x-auto">
+                        <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase">RECENT SUBMISSIONS LOG</h3>
+                        <table class="w-full text-left border-collapse mono text-xs">
+                            <thead>
+                                <tr class="bg-black text-white">
+                                    <th class="p-2 border border-black">WEEK</th>
+                                    <th class="p-2 border border-black">BAND</th>
+                                    <th class="p-2 border border-black">DIRECT</th>
+                                    <th class="p-2 border border-black">INDIRECT</th>
+                                    <th class="p-2 border border-black">SAVES</th>
+                                    <th class="p-2 border border-black">TYPE</th>
+                                    <th class="p-2 border border-black">SCORE</th>
+                                    <th class="p-2 border border-black">SHARED</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="sub in weeklySubmissions" :key="sub.id">
+                                    <tr class="hover:bg-yellow-50">
+                                        <td class="p-2 border border-black font-bold" x-text="sub.week"></td>
+                                        <td class="p-2 border border-black" x-text="sub.band_name"></td>
+                                        <td class="p-2 border border-black" x-text="sub.direct_views"></td>
+                                        <td class="p-2 border border-black" x-text="sub.indirect_views"></td>
+                                        <td class="p-2 border border-black" x-text="sub.total_saves"></td>
+                                        <td class="p-2 border border-black" x-text="sub.interaction_type"></td>
+                                        <td class="p-2 border border-black font-bold" x-text="sub.interaction_score"></td>
+                                        <td class="p-2 border border-black" x-text="sub.shared ? 'YES' : 'NO'"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
 
