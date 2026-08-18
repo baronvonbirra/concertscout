@@ -163,5 +163,47 @@ class TestScoutV2(unittest.TestCase):
 
         self.assertTrue(mock_scrape.called)
 
+    def test_calculate_momentum_score(self):
+        # wow=20%, mom=30%, tot=100% -> (20*0.5) + (30*0.3) + (10*0.2) = 10 + 9 + 2 = 21
+        score = scout.calculate_momentum_score(20, 30, 100)
+        self.assertEqual(score, 21)
+
+        # Capped at 100
+        score_high = scout.calculate_momentum_score(300, 200, 1000)
+        self.assertEqual(score_high, 100)
+
+        # Floor at 0
+        score_low = scout.calculate_momentum_score(-50, -50, -100)
+        self.assertEqual(score_low, 0)
+
+    def test_determine_trajectory(self):
+        snaps_explosive = [
+            {"listener_count": 150000, "recorded_date": "2026-02-28"},
+            {"listener_count": 130000, "recorded_date": "2026-02-21"},
+            {"listener_count": 120000, "recorded_date": "2026-02-14"},
+            {"listener_count": 110000, "recorded_date": "2026-02-07"},
+            {"listener_count": 100000, "recorded_date": "2026-01-31"}
+        ]
+        # 150000 > 100000 * 1.3 (130000) -> explosive
+        self.assertEqual(scout.determine_trajectory(snaps_explosive), "explosive")
+
+        snaps_steady = [
+            {"listener_count": 110000, "recorded_date": "2026-02-28"},
+            {"listener_count": 108000, "recorded_date": "2026-02-21"},
+            {"listener_count": 105000, "recorded_date": "2026-02-14"},
+            {"listener_count": 102000, "recorded_date": "2026-02-07"},
+            {"listener_count": 100000, "recorded_date": "2026-01-31"}
+        ]
+        self.assertEqual(scout.determine_trajectory(snaps_steady), "steady")
+
+        snaps_declining = [
+            {"listener_count": 50000, "recorded_date": "2026-02-28"},
+            {"listener_count": 60000, "recorded_date": "2026-02-21"},
+            {"listener_count": 70000, "recorded_date": "2026-02-14"},
+            {"listener_count": 80000, "recorded_date": "2026-02-07"},
+            {"listener_count": 100000, "recorded_date": "2026-01-31"}
+        ]
+        self.assertEqual(scout.determine_trajectory(snaps_declining), "declining")
+
 if __name__ == '__main__':
     unittest.main()
