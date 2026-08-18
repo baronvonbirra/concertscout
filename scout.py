@@ -1168,11 +1168,375 @@ def run_enrichment_pipeline():
     # Experimental keyword checks on Instagram
     scan_instagram_enrichment()
 
+def calculate_momentum_score(wow_growth_pct, mom_growth_pct, total_growth_pct):
+    wow = float(wow_growth_pct or 0)
+    mom = float(mom_growth_pct or 0)
+    tot = float(total_growth_pct or 0)
+
+    recent_weight = (wow * 0.5) + (mom * 0.3) + ((tot / 10.0) * 0.2)
+    score = int(round(recent_weight))
+    return max(0, min(100, score))
+
+def determine_trajectory(snapshots_desc):
+    """
+    Given a list of snapshot dicts ordered by recorded_date DESC.
+    Compares recent vs older listener counts to assign trajectory.
+    """
+    if not snapshots_desc:
+        return "flat"
+    if len(snapshots_desc) == 1:
+        count = snapshots_desc[0].get("listener_count", 0)
+        return "steady" if count > 0 else "flat"
+
+    recent = snapshots_desc[0].get("listener_count", 0)
+    # Compare with snapshot from 4+ positions back, or oldest available
+    compare_idx = 4 if len(snapshots_desc) > 4 else len(snapshots_desc) - 1
+    previous = snapshots_desc[compare_idx].get("listener_count", 0)
+
+    if previous <= 0:
+        return "explosive" if recent > 0 else "flat"
+
+    if recent > previous * 1.3:
+        return "explosive"
+    elif recent >= previous * 0.9:
+        return "steady"
+    elif recent > 0 and recent >= previous * 0.7:
+        return "flat"
+    else:
+        return "declining"
+
+def search_spotify_artist(band_name):
+    token = get_spotify_token()
+    if not token:
+        return None, 0
+    url = "https://api.spotify.com/v1/search"
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"q": band_name, "type": "artist", "limit": 1}
+    time.sleep(0.5)
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=10)
+        if res.status_code == 200:
+            items = res.json().get("artists", {}).get("items", [])
+            if items:
+                art = items[0]
+                return art.get("id"), art.get("followers", {}).get("total", 0)
+    except Exception as e:
+        print(f"Error searching Spotify artist for '{band_name}': {e}")
+    return None, 0
+
+def take_band_listener_snapshots():
+    if not supabase:
+        print("Warning: Supabase client not initialized. Skipping band listener snapshots.")
+        return
+
+    print("--- Running Band Listener Snapshot Collection ---")
+    band_map = {}  # band_name_lower -> {"band_name": str, "spotify_id": str}
+
+    # 1. Collect unique bands from weekly_submissions
+    try:
+        ws_res = supabase.table("weekly_submissions").select("band_name").execute()
+        if ws_res.data:
+            for r in ws_res.data:
+                bname = r.get("band_name", "").strip()
+                if bname and bname.lower() not in band_map:
+                    band_map[bname.lower()] = {"band_name": bname, "spotify_id": None}
+    except Exception as e:
+        print(f"Error reading weekly_submissions for snapshot: {e}")
+
+    # 2. Collect unique bands from band_registry
+    try:
+        br_res = supabase.table("band_registry").select("band_name, spotify_id").execute()
+        if br_res.data:
+            for r in br_res.data:
+                bname = r.get("band_name", "").strip()
+                sp_id = r.get("spotify_id")
+                if bname:
+                    b_lower = bname.lower()
+                    if b_lower not in band_map:
+                        band_map[b_lower] = {"band_name": bname, "spotify_id": sp_id}
+                    elif sp_id and not band_map[b_lower]["spotify_id"]:
+                        band_map[b_lower]["spotify_id"] = sp_id
+    except Exception as e:
+        print(f"Error reading band_registry for snapshot: {e}")
+
+    # 3. Collect unique bands from playlist_history
+    try:
+        ph_res = supabase.table("playlist_history").select("artist_name, artist_id").execute()
+        if ph_res.data:
+            for r in ph_res.data:
+                bname = r.get("artist_name", "").strip()
+                sp_id = r.get("artist_id")
+                if bname:
+                    b_lower = bname.lower()
+                    if b_lower not in band_map:
+                        band_map[b_lower] = {"band_name": bname, "spotify_id": sp_id}
+                    elif sp_id and not band_map[b_lower]["spotify_id"]:
+                        band_map[b_lower]["spotify_id"] = sp_id
+    except Exception as e:
+        print(f"Error reading playlist_history for snapshot: {e}")
+
+    # 4. Collect unique bands from artists table
+    try:
+        art_res = supabase.table("artists").select("name, spotify_id").eq("is_active", True).execute()
+        if art_res.data:
+            for r in art_res.data:
+                bname = r.get("name", "").strip()
+                sp_id = r.get("spotify_id")
+                if bname:
+                    b_lower = bname.lower()
+                    if b_lower not in band_map:
+                        band_map[b_lower] = {"band_name": bname, "spotify_id": sp_id}
+                    elif sp_id and not band_map[b_lower]["spotify_id"]:
+                        band_map[b_lower]["spotify_id"] = sp_id
+    except Exception as e:
+        print(f"Error reading artists for snapshot: {e}")
+
+    print(f"Found {len(band_map)} unique bands to snapshot.")
+    today_str = datetime.now().date().isoformat()
+    current_week = f"W{datetime.now().isocalendar()[1]}"
+
+    success_count = 0
+    fail_count = 0
+
+    for b_lower, info in band_map.items():
+        bname = info["band_name"]
+        sp_id = info["spotify_id"]
+        followers = 0
+
+        if not sp_id:
+            sp_id, followers = search_spotify_artist(bname)
+
+        listener_count = 0
+        if sp_id:
+            listener_count = get_monthly_listeners(sp_id)
+
+        if listener_count == 0 and not sp_id:
+            print(f"Could not resolve Spotify metrics for '{bname}'. Skipping.")
+            fail_count += 1
+            continue
+
+        snapshot_payload = {
+            "band_name": bname,
+            "spotify_id": sp_id,
+            "listener_count": listener_count,
+            "follower_count": followers,
+            "recorded_date": today_str,
+            "snapshot_week": current_week,
+            "source": "spotify_api"
+        }
+
+        try:
+            supabase.table("band_listener_snapshot").insert(snapshot_payload).execute()
+            success_count += 1
+        except Exception as e:
+            print(f"Error inserting snapshot for '{bname}': {e}")
+            fail_count += 1
+
+    total_attempted = success_count + fail_count
+    success_rate = (success_count / total_attempted * 100) if total_attempted > 0 else 100
+    print(f"Snapshot run complete: {success_count}/{total_attempted} bands updated ({success_rate:.1f}% success rate).")
+    if total_attempted > 0 and success_rate < 80.0:
+        print("🚨 ALERT: Snapshot success rate fell below 80% threshold!")
+
+def recalculate_analytics_summary():
+    if not supabase:
+        print("Warning: Supabase client not initialized. Skipping analytics recalculation.")
+        return
+
+    print("--- Recalculating Band Analytics Summary ---")
+
+    # Fetch feature history per band from weekly_submissions & playlist_history
+    featured_history = {}  # band_lower -> {"first_week": str, "last_week": str, "count": int}
+
+    try:
+        ws_res = supabase.table("weekly_submissions").select("band_name, week").execute()
+        if ws_res.data:
+            for r in ws_res.data:
+                bname = r.get("band_name", "").strip().lower()
+                week = r.get("week")
+                if bname and week:
+                    if bname not in featured_history:
+                        featured_history[bname] = {"weeks": set()}
+                    featured_history[bname]["weeks"].add(week)
+    except Exception as e:
+        print(f"Error reading weekly_submissions feature history: {e}")
+
+    try:
+        ph_res = supabase.table("playlist_history").select("artist_name, added_at").execute()
+        if ph_res.data:
+            for r in ph_res.data:
+                bname = r.get("artist_name", "").strip().lower()
+                added_at = r.get("added_at")
+                if bname and added_at:
+                    try:
+                        dt = datetime.fromisoformat(added_at.replace("Z", "+00:00"))
+                        w_str = f"W{dt.isocalendar()[1]}"
+                    except Exception:
+                        w_str = f"W{datetime.now().isocalendar()[1]}"
+                    if bname not in featured_history:
+                        featured_history[bname] = {"weeks": set()}
+                    featured_history[bname]["weeks"].add(w_str)
+    except Exception as e:
+        print(f"Error reading playlist_history feature history: {e}")
+
+    # Query all snapshots ordered by recorded_date ASC
+    try:
+        start = 0
+        page_size = 1000
+        all_snapshots = []
+        while True:
+            res = supabase.table("band_listener_snapshot").select("*").range(start, start + page_size - 1).order("recorded_date", desc=False).execute()
+            if not res.data:
+                break
+            all_snapshots.extend(res.data)
+            if len(res.data) < page_size:
+                break
+            start += page_size
+    except Exception as e:
+        print(f"Error fetching snapshots for summary recalculation: {e}")
+        return
+
+    # Group by band_name
+    band_snapshots = {}
+    for s in all_snapshots:
+        bname = s.get("band_name", "").strip()
+        if not bname:
+            continue
+        if bname not in band_snapshots:
+            band_snapshots[bname] = []
+        band_snapshots[bname].append(s)
+
+    print(f"Recalculating analytics summary for {len(band_snapshots)} bands with snapshot data...")
+
+    summary_records = []
+    for bname, snaps in band_snapshots.items():
+        # Sorted by date ASC
+        snaps.sort(key=lambda x: str(x.get("recorded_date", "")))
+
+        first_snap = snaps[0]
+        latest_snap = snaps[-1]
+
+        sp_id = latest_snap.get("spotify_id") or first_snap.get("spotify_id")
+        first_date_str = str(first_snap.get("recorded_date", ""))
+        latest_date_str = str(latest_snap.get("recorded_date", ""))
+        latest_count = int(latest_snap.get("listener_count", 0))
+
+        # Peak calculation
+        peak_count = 0
+        peak_date_str = latest_date_str
+        for s in snaps:
+            lc = int(s.get("listener_count", 0))
+            if lc >= peak_count:
+                peak_count = lc
+                peak_date_str = str(s.get("recorded_date", ""))
+
+        # Days tracked
+        try:
+            d_first = datetime.strptime(first_date_str[:10], "%Y-%m-%d").date()
+            d_latest = datetime.strptime(latest_date_str[:10], "%Y-%m-%d").date()
+            days_tracked = max(1, (d_latest - d_first).days)
+        except Exception:
+            days_tracked = 1
+
+        # WoW Growth calculation (~7 days back)
+        wow_growth = 0.00
+        if len(snaps) > 1:
+            prev_7d_snap = None
+            try:
+                latest_dt = datetime.strptime(latest_date_str[:10], "%Y-%m-%d").date()
+                for s in reversed(snaps[:-1]):
+                    s_dt = datetime.strptime(str(s.get("recorded_date"))[:10], "%Y-%m-%d").date()
+                    if (latest_dt - s_dt).days >= 5:
+                        prev_7d_snap = s
+                        break
+            except Exception:
+                pass
+            if not prev_7d_snap:
+                prev_7d_snap = snaps[-2]
+
+            prev_count = int(prev_7d_snap.get("listener_count", 0))
+            if prev_count > 0:
+                wow_growth = round(((latest_count - prev_count) / float(prev_count)) * 100.0, 2)
+
+        # MoM Growth calculation (~30 days back)
+        mom_growth = 0.00
+        if len(snaps) > 1:
+            prev_30d_snap = None
+            try:
+                latest_dt = datetime.strptime(latest_date_str[:10], "%Y-%m-%d").date()
+                for s in reversed(snaps[:-1]):
+                    s_dt = datetime.strptime(str(s.get("recorded_date"))[:10], "%Y-%m-%d").date()
+                    if (latest_dt - s_dt).days >= 25:
+                        prev_30d_snap = s
+                        break
+            except Exception:
+                pass
+            if not prev_30d_snap and len(snaps) >= 4:
+                prev_30d_snap = snaps[0]
+
+            if prev_30d_snap:
+                prev_m_count = int(prev_30d_snap.get("listener_count", 0))
+                if prev_m_count > 0:
+                    mom_growth = round(((latest_count - prev_m_count) / float(prev_m_count)) * 100.0, 2)
+
+        # Total growth since first snapshot
+        first_count = int(first_snap.get("listener_count", 0))
+        if first_count > 0:
+            total_growth = round(((latest_count - first_count) / float(first_count)) * 100.0, 2)
+        else:
+            total_growth = 0.00
+
+        momentum = calculate_momentum_score(wow_growth, mom_growth, total_growth)
+
+        # Trajectory based on snapshots DESC
+        snaps_desc = list(reversed(snaps))
+        trajectory = determine_trajectory(snaps_desc)
+
+        # Feature info
+        b_lower = bname.lower()
+        f_weeks = sorted(list(featured_history.get(b_lower, {}).get("weeks", [])))
+        first_feat_week = f_weeks[0] if f_weeks else None
+        last_feat_week = f_weeks[-1] if f_weeks else None
+        tot_features = len(f_weeks)
+
+        summary_payload = {
+            "band_name": bname,
+            "spotify_id": sp_id,
+            "first_snapshot_date": first_date_str if first_date_str else None,
+            "latest_listener_count": latest_count,
+            "latest_snapshot_date": latest_date_str if latest_date_str else None,
+            "week_over_week_growth_pct": float(wow_growth),
+            "month_over_month_growth_pct": float(mom_growth),
+            "total_growth_since_first_snapshot": float(total_growth),
+            "momentum_score": momentum,
+            "growth_trajectory": trajectory,
+            "peak_listener_count": peak_count,
+            "peak_date": peak_date_str if peak_date_str else None,
+            "first_featured_week": first_feat_week,
+            "last_featured_week": last_feat_week,
+            "total_features": tot_features,
+            "days_tracked": days_tracked,
+            "updated_at": datetime.now().isoformat()
+        }
+
+        summary_records.append(summary_payload)
+
+    if summary_records:
+        try:
+            for rec in summary_records:
+                supabase.table("band_analytics_summary").upsert(
+                    rec, on_conflict="band_name"
+                ).execute()
+            print(f"Successfully upserted {len(summary_records)} band analytics summaries.")
+        except Exception as e:
+            print(f"Error upserting band_analytics_summary records: {e}")
+
 def main():
     parser = argparse.ArgumentParser(description="ConcertScout Ingest & Enrichment Pipeline")
     parser.add_argument("--playlist", type=str, help="On-demand playlist ingestion URL/ID (Module B)")
     parser.add_argument("--weekly", action="store_true", help="Run the Wednesday Automated Ingestion (Module A)")
     parser.add_argument("--monday-playlist", action="store_true", help="Run the Monday Automated Playlist Curation")
+    parser.add_argument("--analytics", action="store_true", help="Run the Sunday Band Analytics Snapshot & Recalculation")
 
     args = parser.parse_args()
 
@@ -1187,6 +1551,9 @@ def main():
         run_enrichment_pipeline()
     elif args.monday_playlist:
         generate_monday_playlist()
+    elif args.analytics:
+        take_band_listener_snapshots()
+        recalculate_analytics_summary()
     else:
         # Default runs the full enrichment pipeline for existing active bands
         run_enrichment_pipeline()

@@ -158,3 +158,92 @@ CREATE POLICY "Allow anon read access" ON playlist_history FOR SELECT USING (tru
 CREATE POLICY "Allow anon insert access" ON playlist_history FOR INSERT WITH CHECK (true);
 CREATE POLICY "Allow anon update access" ON playlist_history FOR UPDATE USING (true) WITH CHECK (true);
 CREATE POLICY "Allow anon delete access" ON playlist_history FOR DELETE USING (true);
+
+-- Analytics Layer Tables
+
+-- 1. Band Listener Snapshot Table
+CREATE TABLE IF NOT EXISTS band_listener_snapshot (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    band_name VARCHAR NOT NULL,
+    spotify_id VARCHAR,
+    listener_count INT DEFAULT 0,
+    follower_count INT DEFAULT 0,
+    recorded_date DATE DEFAULT CURRENT_DATE,
+    snapshot_week VARCHAR,
+    source VARCHAR DEFAULT 'spotify_api',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_band_listener_snapshot_band_date ON band_listener_snapshot (band_name, recorded_date);
+
+-- 2. Band Analytics Summary Table
+CREATE TABLE IF NOT EXISTS band_analytics_summary (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    band_name VARCHAR UNIQUE NOT NULL,
+    spotify_id VARCHAR,
+    first_snapshot_date DATE,
+    latest_listener_count INT DEFAULT 0,
+    latest_snapshot_date DATE,
+    week_over_week_growth_pct DECIMAL(10,2) DEFAULT 0.00,
+    month_over_month_growth_pct DECIMAL(10,2) DEFAULT 0.00,
+    total_growth_since_first_snapshot DECIMAL(10,2) DEFAULT 0.00,
+    momentum_score INT DEFAULT 0,
+    growth_trajectory VARCHAR DEFAULT 'flat',
+    peak_listener_count INT DEFAULT 0,
+    peak_date DATE,
+    first_featured_week VARCHAR,
+    last_featured_week VARCHAR,
+    total_features INT DEFAULT 0,
+    days_tracked INT DEFAULT 0,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_band_analytics_summary_momentum ON band_analytics_summary (momentum_score DESC, latest_listener_count DESC);
+
+-- 3. Band Analytics Events Table
+CREATE TABLE IF NOT EXISTS band_analytics_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    band_name VARCHAR NOT NULL,
+    event_type VARCHAR NOT NULL,
+    milestone_type VARCHAR,
+    event_date DATE DEFAULT CURRENT_DATE,
+    listener_count_at_event INT DEFAULT 0,
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Enable RLS on Analytics Tables
+ALTER TABLE band_listener_snapshot ENABLE ROW LEVEL SECURITY;
+ALTER TABLE band_analytics_summary ENABLE ROW LEVEL SECURITY;
+ALTER TABLE band_analytics_events ENABLE ROW LEVEL SECURITY;
+
+-- Security Policies for band_listener_snapshot
+DROP POLICY IF EXISTS "Allow anon read band_listener_snapshot" ON band_listener_snapshot;
+DROP POLICY IF EXISTS "Allow anon insert band_listener_snapshot" ON band_listener_snapshot;
+DROP POLICY IF EXISTS "Allow anon update band_listener_snapshot" ON band_listener_snapshot;
+DROP POLICY IF EXISTS "Allow anon delete band_listener_snapshot" ON band_listener_snapshot;
+
+CREATE POLICY "Allow anon read band_listener_snapshot" ON band_listener_snapshot FOR SELECT USING (true);
+CREATE POLICY "Allow anon insert band_listener_snapshot" ON band_listener_snapshot FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow anon update band_listener_snapshot" ON band_listener_snapshot FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "Allow anon delete band_listener_snapshot" ON band_listener_snapshot FOR DELETE USING (true);
+
+-- Security Policies for band_analytics_summary
+DROP POLICY IF EXISTS "Allow anon read band_analytics_summary" ON band_analytics_summary;
+DROP POLICY IF EXISTS "Allow anon insert band_analytics_summary" ON band_analytics_summary;
+DROP POLICY IF EXISTS "Allow anon update band_analytics_summary" ON band_analytics_summary;
+DROP POLICY IF EXISTS "Allow anon delete band_analytics_summary" ON band_analytics_summary;
+
+CREATE POLICY "Allow anon read band_analytics_summary" ON band_analytics_summary FOR SELECT USING (true);
+CREATE POLICY "Allow anon insert band_analytics_summary" ON band_analytics_summary FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow anon update band_analytics_summary" ON band_analytics_summary FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "Allow anon delete band_analytics_summary" ON band_analytics_summary FOR DELETE USING (true);
+
+-- Security Policies for band_analytics_events
+DROP POLICY IF EXISTS "Allow anon read band_analytics_events" ON band_analytics_events;
+DROP POLICY IF EXISTS "Allow anon insert band_analytics_events" ON band_analytics_events;
+DROP POLICY IF EXISTS "Allow anon update band_analytics_events" ON band_analytics_events;
+DROP POLICY IF EXISTS "Allow anon delete band_analytics_events" ON band_analytics_events;
+
+CREATE POLICY "Allow anon read band_analytics_events" ON band_analytics_events FOR SELECT USING (true);
+CREATE POLICY "Allow anon insert band_analytics_events" ON band_analytics_events FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow anon update band_analytics_events" ON band_analytics_events FOR UPDATE USING (true) WITH CHECK (true);
+CREATE POLICY "Allow anon delete band_analytics_events" ON band_analytics_events FOR DELETE USING (true);

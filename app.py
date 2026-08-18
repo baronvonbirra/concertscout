@@ -156,7 +156,7 @@ supabase = get_supabase_client()
 @st.cache_data(ttl=3600)
 def fetch_consolidated_data():
     if not supabase:
-        return {"concerts": [], "artists": [], "weekly_playlist": [], "tour_events": [], "weekly_submissions": []}
+        return {"concerts": [], "artists": [], "weekly_playlist": [], "tour_events": [], "weekly_submissions": [], "analytics_summary": [], "listener_snapshots": []}
 
     try:
         # Fetch tour_events for Phase 3 display
@@ -174,6 +174,22 @@ def fetch_consolidated_data():
             weekly_submissions = ws_res.data if ws_res.data else []
         except Exception as ws_e:
             print(f"Error fetching weekly_submissions: {ws_e}")
+
+        # Fetch analytics summary for Analytics Dashboard
+        analytics_summary = []
+        try:
+            ans_res = supabase.table("band_analytics_summary").select("*").order("momentum_score", desc=True).execute()
+            analytics_summary = ans_res.data if ans_res.data else []
+        except Exception as ans_e:
+            print(f"Error fetching band_analytics_summary: {ans_e}")
+
+        # Fetch listener snapshots for details modal
+        listener_snapshots = []
+        try:
+            snap_res = supabase.table("band_listener_snapshot").select("*").order("recorded_date", desc=True).limit(1000).execute()
+            listener_snapshots = snap_res.data if snap_res.data else []
+        except Exception as snap_e:
+            print(f"Error fetching band_listener_snapshot: {snap_e}")
 
         # Fetch concerts joined with artist details
         res = supabase.table("concerts").select("*, artists(id, name, spotify_id, instagram_url, lastfm_url, source_playlist, is_active, last_instagram_post_id)").execute()
@@ -230,11 +246,13 @@ def fetch_consolidated_data():
             "artists": active_artists,
             "weekly_playlist": weekly_playlist,
             "tour_events": tour_events,
-            "weekly_submissions": weekly_submissions
+            "weekly_submissions": weekly_submissions,
+            "analytics_summary": analytics_summary,
+            "listener_snapshots": listener_snapshots
         }
     except Exception as e:
         st.error(f"Error fetching data: {e}")
-        return {"concerts": [], "artists": [], "weekly_playlist": [], "tour_events": [], "weekly_submissions": []}
+        return {"concerts": [], "artists": [], "weekly_playlist": [], "tour_events": [], "weekly_submissions": [], "analytics_summary": [], "listener_snapshots": []}
 
 def main():
     # Check if we should force refresh
@@ -325,6 +343,79 @@ def main():
             weeklyPlaylist: window.concertData.weekly_playlist || [],
             tourEvents: window.concertData.tour_events || [],
             weeklySubmissions: window.concertData.weekly_submissions || [],
+            analyticsSummary: window.concertData.analytics_summary || [],
+            listenerSnapshots: window.concertData.listener_snapshots || [],
+
+            // Analytics Dashboard State
+            analyticsSortKey: 'momentum_score',
+            analyticsSortAsc: false,
+            analyticsFilter: 'all',
+            selectedBandAnalytics: null,
+            bandModalOpen: false,
+
+            get filteredAnalytics() {
+                return this.analyticsSummary
+                    .filter(b => {
+                        const matchSearch = b.band_name.toLowerCase().includes(this.search.toLowerCase());
+                        if (!matchSearch) return false;
+                        if (this.analyticsFilter === 'explosive') return b.growth_trajectory === 'explosive';
+                        if (this.analyticsFilter === 'featured') return b.total_features > 0;
+                        if (this.analyticsFilter === 'under100k') return b.latest_listener_count < 100000;
+                        return true;
+                    })
+                    .sort((a, b) => {
+                        let valA = a[this.analyticsSortKey];
+                        let valB = b[this.analyticsSortKey];
+                        if (typeof valA === 'string') valA = valA.toLowerCase();
+                        if (typeof valB === 'string') valB = valB.toLowerCase();
+                        if (valA < valB) return this.analyticsSortAsc ? -1 : 1;
+                        if (valA > valB) return this.analyticsSortAsc ? 1 : -1;
+                        return 0;
+                    });
+            },
+
+            get totalBandsTracked() {
+                return this.analyticsSummary.length;
+            },
+
+            get totalListeners() {
+                const total = this.analyticsSummary.reduce((sum, b) => sum + (b.latest_listener_count || 0), 0);
+                if (total >= 1000000) return (total / 1000000).toFixed(1) + 'M';
+                if (total >= 1000) return (total / 1000).toFixed(1) + 'K';
+                return total.toString();
+            },
+
+            get avgWowGrowth() {
+                if (this.analyticsSummary.length === 0) return '+0.0%';
+                const sum = this.analyticsSummary.reduce((acc, b) => acc + parseFloat(b.week_over_week_growth_pct || 0), 0);
+                const avg = sum / this.analyticsSummary.length;
+                return (avg >= 0 ? '+' : '') + avg.toFixed(1) + '%';
+            },
+
+            get mostExplosiveBand() {
+                if (this.analyticsSummary.length === 0) return 'N/A';
+                const explosive = [...this.analyticsSummary].sort((a, b) => (b.week_over_week_growth_pct || 0) - (a.week_over_week_growth_pct || 0));
+                return explosive[0] ? explosive[0].band_name : 'N/A';
+            },
+
+            openBandModal(band) {
+                this.selectedBandAnalytics = band;
+                this.bandModalOpen = true;
+            },
+
+            getBandSnapshots(bandName) {
+                if (!bandName) return [];
+                return this.listenerSnapshots
+                    .filter(s => s.band_name.toLowerCase() === bandName.toLowerCase())
+                    .sort((a, b) => new Date(b.recorded_date) - new Date(a.recorded_date));
+            },
+
+            getBandTours(bandName) {
+                if (!bandName) return [];
+                return this.tourEvents
+                    .filter(t => t.band_name.toLowerCase() === bandName.toLowerCase())
+                    .sort((a, b) => new Date(a.event_date) - new Date(b.event_date));
+            },
 
             // Admin Panel State
             adminAuth: false,
@@ -741,13 +832,15 @@ def main():
 
                     <div class="flex flex-wrap border-4 border-white overflow-hidden w-full md:w-7/12">
                         <button @click="viewMode = 'tours'" :class="viewMode === 'tours' ? 'bg-[#CCFF00] text-black' : 'text-white'"
-                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all">🎸 UPCOMING TOURS</button>
+                                class="flex-1 px-2 md:px-3 py-3 bebas text-base md:text-xl transition-all">🎸 TOURS</button>
+                        <button @click="viewMode = 'analytics'" :class="viewMode === 'analytics' ? 'bg-[#00E5FF] text-black' : 'text-white'"
+                                class="flex-1 px-2 md:px-3 py-3 bebas text-base md:text-xl transition-all border-l-2 md:border-l-4 border-white">📊 ANALYTICS</button>
                         <button @click="viewMode = 'playlist'" :class="viewMode === 'playlist' ? 'bg-[#FFCC00] text-black' : 'text-white'"
-                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all border-l-2 md:border-l-4 border-white">PUNK IN PROGRESS</button>
+                                class="flex-1 px-2 md:px-3 py-3 bebas text-base md:text-xl transition-all border-l-2 md:border-l-4 border-white">PUNK IN PROGRESS</button>
                         <button @click="viewMode = 'admin'" :class="viewMode === 'admin' ? 'bg-[#FF5733] text-black' : 'text-white'"
-                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all border-l-2 md:border-l-4 border-white">ADMIN PANEL</button>
+                                class="flex-1 px-2 md:px-3 py-3 bebas text-base md:text-xl transition-all border-l-2 md:border-l-4 border-white">ADMIN</button>
                         <button @click="viewMode = 'scan'" :class="viewMode === 'scan' ? 'bg-white text-black' : 'text-white'"
-                                class="flex-1 px-2 md:px-4 py-3 bebas text-lg md:text-xl transition-all border-l-2 md:border-l-4 border-white">SCAN POSTERS</button>
+                                class="flex-1 px-2 md:px-3 py-3 bebas text-base md:text-xl transition-all border-l-2 md:border-l-4 border-white">SCAN</button>
                     </div>
 
                     <button @click="forceRefresh()"
@@ -795,6 +888,265 @@ def main():
                 <!-- Empty State for Tours -->
                 <div x-show="tourEvents.length === 0" class="text-center py-20">
                     <p class="bebas text-4xl opacity-50">NO UPCOMING TOURS IN SPAIN / PORTUGAL. STAY REBELLIOUS.</p>
+                </div>
+            </div>
+
+            <!-- Analytics Dashboard Section -->
+            <div x-show="viewMode === 'analytics'" x-cloak class="space-y-8">
+                <!-- Section 1: Overview Cards -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                        <p class="mono text-xs text-gray-500 uppercase font-bold">Bands Tracked</p>
+                        <h3 class="bebas text-5xl mt-2" x-text="totalBandsTracked"></h3>
+                        <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Historical Snapshot Audit</p>
+                    </div>
+                    <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                        <p class="mono text-xs text-gray-500 uppercase font-bold">Total Listeners</p>
+                        <h3 class="bebas text-5xl mt-2 acid-lime" x-text="totalListeners"></h3>
+                        <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Combined Spotify Audience</p>
+                    </div>
+                    <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                        <p class="mono text-xs text-gray-500 uppercase font-bold">Avg WoW Growth</p>
+                        <h3 class="bebas text-5xl mt-2" :class="avgWowGrowth.startsWith('+') ? 'text-green-600' : 'text-red-600'" x-text="avgWowGrowth"></h3>
+                        <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Weekly Portfolio Velocity</p>
+                    </div>
+                    <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                        <p class="mono text-xs text-gray-500 uppercase font-bold">Most Explosive Act</p>
+                        <h3 class="bebas text-4xl mt-2 truncate text-purple-700" x-text="mostExplosiveBand"></h3>
+                        <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Top Weekly Velocity</p>
+                    </div>
+                </div>
+
+                <!-- Filters & Controls -->
+                <div class="flex flex-wrap items-center justify-between gap-4 bg-gray-900 p-4 border-4 border-white">
+                    <div class="flex flex-wrap gap-2">
+                        <button @click="analyticsFilter = 'all'" :class="analyticsFilter === 'all' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">ALL BANDS</button>
+                        <button @click="analyticsFilter = 'explosive'" :class="analyticsFilter === 'explosive' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">🚀 EXPLOSIVE ONLY</button>
+                        <button @click="analyticsFilter = 'featured'" :class="analyticsFilter === 'featured' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">🔥 FEATURED BY US</button>
+                        <button @click="analyticsFilter = 'under100k'" :class="analyticsFilter === 'under100k' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">💎 HIDDEN GEMS (&lt;100K)</button>
+                    </div>
+
+                    <div class="flex items-center gap-2 mono text-xs">
+                        <span class="text-gray-400 uppercase font-bold">SORT BY:</span>
+                        <select x-model="analyticsSortKey" class="bg-black text-white p-2 border border-white focus:outline-none uppercase font-bold">
+                            <option value="momentum_score">Momentum Score</option>
+                            <option value="latest_listener_count">Listeners</option>
+                            <option value="week_over_week_growth_pct">WoW Growth %</option>
+                            <option value="month_over_month_growth_pct">MoM Growth %</option>
+                            <option value="band_name">Band Name</option>
+                        </select>
+                        <button @click="analyticsSortAsc = !analyticsSortAsc" class="bg-white text-black p-2 font-bold border border-white" x-text="analyticsSortAsc ? '▲' : '▼'"></button>
+                    </div>
+                </div>
+
+                <!-- Section 2: Sortable Band Table -->
+                <div class="brutal-card p-6 bg-white text-black overflow-x-auto">
+                    <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
+                        <span>BAND GROWTH TRACKER</span>
+                        <span class="mono text-xs font-normal text-gray-500" x-text="'Showing ' + filteredAnalytics.length + ' bands'"></span>
+                    </h3>
+
+                    <table class="w-full text-left border-collapse mono text-xs">
+                        <thead>
+                            <tr class="bg-black text-white uppercase">
+                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800" @click="analyticsSortKey = 'band_name'; analyticsSortAsc = !analyticsSortAsc">BAND NAME</th>
+                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-right" @click="analyticsSortKey = 'latest_listener_count'; analyticsSortAsc = !analyticsSortAsc">LISTENERS</th>
+                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-right" @click="analyticsSortKey = 'week_over_week_growth_pct'; analyticsSortAsc = !analyticsSortAsc">WoW %</th>
+                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-right" @click="analyticsSortKey = 'month_over_month_growth_pct'; analyticsSortAsc = !analyticsSortAsc">MoM %</th>
+                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-center" @click="analyticsSortKey = 'momentum_score'; analyticsSortAsc = !analyticsSortAsc">MOMENTUM</th>
+                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-center" @click="analyticsSortKey = 'growth_trajectory'; analyticsSortAsc = !analyticsSortAsc">TRAJECTORY</th>
+                                <th class="p-3 border border-black text-center">ACTION</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="band in filteredAnalytics" :key="band.id || band.band_name">
+                                <tr class="hover:bg-yellow-100 transition-colors cursor-pointer" @click="openBandModal(band)">
+                                    <td class="p-3 border border-black font-bold text-sm">
+                                        <div class="flex items-center gap-2">
+                                            <span x-text="band.band_name"></span>
+                                            <template x-if="band.total_features > 0">
+                                                <span class="bg-black text-yellow-300 text-[9px] px-1.5 py-0.5 font-bold uppercase">FEATURED</span>
+                                            </template>
+                                        </div>
+                                    </td>
+                                    <td class="p-3 border border-black text-right font-bold text-sm" x-text="(band.latest_listener_count || 0).toLocaleString()"></td>
+                                    <td class="p-3 border border-black text-right font-bold" :class="(band.week_over_week_growth_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((band.week_over_week_growth_pct || 0) >= 0 ? '+' : '') + (band.week_over_week_growth_pct || 0) + '%'"></td>
+                                    <td class="p-3 border border-black text-right font-bold" :class="(band.month_over_month_growth_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((band.month_over_month_growth_pct || 0) >= 0 ? '+' : '') + (band.month_over_month_growth_pct || 0) + '%'"></td>
+                                    <td class="p-3 border border-black text-center">
+                                        <div class="inline-block bg-black text-[#CCFF00] font-bold px-2.5 py-1 text-xs border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                                            🔥 <span x-text="band.momentum_score || 0"></span>/100
+                                        </div>
+                                    </td>
+                                    <td class="p-3 border border-black text-center font-bold">
+                                        <span x-show="band.growth_trajectory === 'explosive'" class="bg-purple-200 text-purple-900 border border-purple-800 px-2 py-0.5 text-[10px] uppercase">📈 EXPLOSIVE</span>
+                                        <span x-show="band.growth_trajectory === 'steady'" class="bg-green-200 text-green-900 border border-green-800 px-2 py-0.5 text-[10px] uppercase">📊 STEADY</span>
+                                        <span x-show="band.growth_trajectory === 'flat'" class="bg-yellow-200 text-yellow-900 border border-yellow-800 px-2 py-0.5 text-[10px] uppercase">▬ FLAT</span>
+                                        <span x-show="band.growth_trajectory === 'declining'" class="bg-red-200 text-red-900 border border-red-800 px-2 py-0.5 text-[10px] uppercase">📉 DECLINING</span>
+                                    </td>
+                                    <td class="p-3 border border-black text-center" @click.stop>
+                                        <button @click="openBandModal(band)" class="bg-black text-white hover:bg-[#CCFF00] hover:text-black px-3 py-1 font-bold text-xs uppercase border border-black transition-colors">
+                                            INSPECT
+                                        </button>
+                                    </td>
+                                </tr>
+                            </template>
+
+                            <template x-if="filteredAnalytics.length === 0">
+                                <tr>
+                                    <td colspan="7" class="p-8 text-center text-gray-500 font-bold uppercase">NO ANALYTICS SNAPSHOTS RECORDED YET. RUN SUNDAY SNAPSHOT JOB.</td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Section 3: Visual Trends -->
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                    <!-- Bar Chart: Top Momentum Bands -->
+                    <div class="lg:col-span-7 brutal-card p-6 bg-white text-black">
+                        <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase">🔥 TOP MOMENTUM BANDS THIS MONTH</h3>
+                        <div class="space-y-3">
+                            <template x-for="band in [...analyticsSummary].sort((a,b) => (b.momentum_score||0) - (a.momentum_score||0)).slice(0, 5)" :key="band.band_name">
+                                <div>
+                                    <div class="flex justify-between text-xs mono font-bold uppercase mb-1">
+                                        <span x-text="band.band_name"></span>
+                                        <span x-text="(band.momentum_score || 0) + ' / 100'"></span>
+                                    </div>
+                                    <div class="w-full bg-gray-200 h-6 border-2 border-black relative overflow-hidden">
+                                        <div class="bg-[#CCFF00] h-full transition-all duration-500 border-r-2 border-black" :style="'width: ' + Math.max(5, band.momentum_score || 0) + '%'"></div>
+                                    </div>
+                                </div>
+                            </template>
+                            <template x-if="analyticsSummary.length === 0">
+                                <p class="mono text-xs text-gray-500 uppercase">NO MOMENTUM DATA AVAILABLE YET.</p>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- Trajectory Breakdown Card -->
+                    <div class="lg:col-span-5 brutal-card p-6 bg-white text-black flex flex-col justify-between">
+                        <div>
+                            <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase">📈 TRAJECTORY DISTRIBUTION</h3>
+                            <div class="space-y-4 mono text-xs">
+                                <div class="flex justify-between items-center p-3 bg-purple-100 border-2 border-black">
+                                    <span class="font-bold text-purple-900 uppercase">📈 EXPLOSIVE</span>
+                                    <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'explosive').length"></span>
+                                </div>
+                                <div class="flex justify-between items-center p-3 bg-green-100 border-2 border-black">
+                                    <span class="font-bold text-green-900 uppercase">📊 STEADY</span>
+                                    <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'steady').length"></span>
+                                </div>
+                                <div class="flex justify-between items-center p-3 bg-yellow-100 border-2 border-black">
+                                    <span class="font-bold text-yellow-900 uppercase">▬ FLAT</span>
+                                    <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'flat').length"></span>
+                                </div>
+                                <div class="flex justify-between items-center p-3 bg-red-100 border-2 border-black">
+                                    <span class="font-bold text-red-900 uppercase">📉 DECLINING</span>
+                                    <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'declining').length"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- EXPANDABLE BAND DETAIL MODAL -->
+            <div x-show="bandModalOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 overflow-y-auto" x-cloak>
+                <div class="brutal-card bg-white text-black p-6 w-full max-w-3xl relative my-8" @click.away="bandModalOpen = false">
+                    <button @click="bandModalOpen = false" class="absolute top-4 right-4 font-bold text-3xl hover:text-[#FF5733] transition-colors">&times;</button>
+
+                    <template x-if="selectedBandAnalytics">
+                        <div>
+                            <div class="border-b-4 border-black pb-4 mb-6">
+                                <span class="bg-[#CCFF00] text-black font-bold px-2 py-0.5 mono text-xs uppercase border border-black" x-text="selectedBandAnalytics.growth_trajectory"></span>
+                                <h2 class="bebas text-5xl mt-2 leading-none" x-text="selectedBandAnalytics.band_name"></h2>
+                                <p class="mono text-xs text-gray-600 mt-1 uppercase" x-text="'Tracked for ' + selectedBandAnalytics.days_tracked + ' days &middot; Peak: ' + (selectedBandAnalytics.peak_listener_count || 0).toLocaleString() + ' listeners (' + (selectedBandAnalytics.peak_date || 'N/A') + ')'"></p>
+                            </div>
+
+                            <!-- Growth Metrics Grid -->
+                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+                                <div class="p-3 bg-gray-100 border-2 border-black mono">
+                                    <p class="text-[10px] text-gray-500 uppercase font-bold">LISTENERS</p>
+                                    <p class="bebas text-2xl mt-1" x-text="(selectedBandAnalytics.latest_listener_count || 0).toLocaleString()"></p>
+                                </div>
+                                <div class="p-3 bg-gray-100 border-2 border-black mono">
+                                    <p class="text-[10px] text-gray-500 uppercase font-bold">WoW GROWTH</p>
+                                    <p class="bebas text-2xl mt-1" :class="(selectedBandAnalytics.week_over_week_growth_pct || 0) >= 0 ? 'text-green-600' : 'text-red-600'" x-text="((selectedBandAnalytics.week_over_week_growth_pct || 0) >= 0 ? '+' : '') + selectedBandAnalytics.week_over_week_growth_pct + '%'"></p>
+                                </div>
+                                <div class="p-3 bg-gray-100 border-2 border-black mono">
+                                    <p class="text-[10px] text-gray-500 uppercase font-bold">MoM GROWTH</p>
+                                    <p class="bebas text-2xl mt-1" :class="(selectedBandAnalytics.month_over_month_growth_pct || 0) >= 0 ? 'text-green-600' : 'text-red-600'" x-text="((selectedBandAnalytics.month_over_month_growth_pct || 0) >= 0 ? '+' : '') + selectedBandAnalytics.month_over_month_growth_pct + '%'"></p>
+                                </div>
+                                <div class="p-3 bg-black text-[#CCFF00] border-2 border-black mono">
+                                    <p class="text-[10px] text-yellow-300 uppercase font-bold">MOMENTUM</p>
+                                    <p class="bebas text-2xl mt-1" x-text="selectedBandAnalytics.momentum_score + ' / 100'"></p>
+                                </div>
+                            </div>
+
+                            <!-- Featured History & Tour Activity -->
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                                <div class="border-2 border-black p-4 bg-yellow-50">
+                                    <h4 class="bebas text-2xl mb-2 border-b-2 border-black pb-1 uppercase">FEATURED HISTORY</h4>
+                                    <p class="mono text-xs mb-1">Total Times Featured: <strong x-text="selectedBandAnalytics.total_features || 0"></strong></p>
+                                    <p class="mono text-xs mb-1">First Featured: <strong x-text="selectedBandAnalytics.first_featured_week || 'None'"></strong></p>
+                                    <p class="mono text-xs">Last Featured: <strong x-text="selectedBandAnalytics.last_featured_week || 'None'"></strong></p>
+                                </div>
+
+                                <div class="border-2 border-black p-4 bg-purple-50">
+                                    <h4 class="bebas text-2xl mb-2 border-b-2 border-black pb-1 uppercase">TOUR ACTIVITY</h4>
+                                    <template x-if="getBandTours(selectedBandAnalytics.band_name).length > 0">
+                                        <div class="space-y-2 max-h-32 overflow-y-auto">
+                                            <template x-for="t in getBandTours(selectedBandAnalytics.band_name)" :key="t.id">
+                                                <p class="mono text-xs">
+                                                    🎸 <span class="font-bold" x-text="t.city"></span> @ <span x-text="t.venue"></span> (<span x-text="t.event_date"></span>)
+                                                </p>
+                                            </template>
+                                        </div>
+                                    </template>
+                                    <template x-if="getBandTours(selectedBandAnalytics.band_name).length === 0">
+                                        <p class="mono text-xs text-gray-500 uppercase">NO UPCOMING TOURS RECORDED.</p>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <!-- Recent Historical Snapshots Log -->
+                            <div class="border-2 border-black p-4 bg-white">
+                                <h4 class="bebas text-2xl mb-2 border-b-2 border-black pb-1 uppercase">SNAPSHOT LOG HISTORY</h4>
+                                <div class="max-h-40 overflow-y-auto">
+                                    <table class="w-full text-left mono text-xs border-collapse">
+                                        <thead>
+                                            <tr class="bg-gray-100">
+                                                <th class="p-1 border border-black">DATE</th>
+                                                <th class="p-1 border border-black">WEEK</th>
+                                                <th class="p-1 border border-black text-right">LISTENERS</th>
+                                                <th class="p-1 border border-black text-right">FOLLOWERS</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <template x-for="s in getBandSnapshots(selectedBandAnalytics.band_name)" :key="s.id">
+                                                <tr>
+                                                    <td class="p-1 border border-black" x-text="s.recorded_date"></td>
+                                                    <td class="p-1 border border-black" x-text="s.snapshot_week || 'N/A'"></td>
+                                                    <td class="p-1 border border-black text-right font-bold" x-text="(s.listener_count || 0).toLocaleString()"></td>
+                                                    <td class="p-1 border border-black text-right" x-text="(s.follower_count || 0).toLocaleString()"></td>
+                                                </tr>
+                                            </template>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- External Links -->
+                            <div class="mt-6 flex gap-3">
+                                <template x-if="selectedBandAnalytics.spotify_id">
+                                    <a :href="'https://open.spotify.com/artist/' + selectedBandAnalytics.spotify_id" target="_blank"
+                                       class="flex-1 bg-[#1DB954] text-white text-center p-3 bebas text-xl border-2 border-black hover:bg-black hover:text-white transition-colors uppercase">
+                                        Open on Spotify
+                                    </a>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
                 </div>
             </div>
 
