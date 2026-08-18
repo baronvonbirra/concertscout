@@ -205,5 +205,72 @@ class TestScoutV2(unittest.TestCase):
         ]
         self.assertEqual(scout.determine_trajectory(snaps_declining), "declining")
 
+    @patch('scout.supabase')
+    def test_recalculate_analytics_summary_share_tracking_and_lift(self, mock_supabase):
+        mock_table = MagicMock()
+
+        # Mock weekly_submissions data
+        mock_ws_exec = MagicMock(data=[
+            {"band_name": "Ellen May", "week": "W8", "shared": True, "created_at": "2026-02-01T00:00:00"},
+            {"band_name": "Ellen May", "week": "W10", "shared": True, "created_at": "2026-02-15T00:00:00"},
+            {"band_name": "Unshared Band", "week": "W8", "shared": False, "created_at": "2026-02-01T00:00:00"}
+        ])
+
+        # Mock playlist_history data
+        mock_ph_exec = MagicMock(data=[])
+
+        # Mock listener snapshots
+        mock_snap_exec = MagicMock(data=[
+            # Ellen May W8 (10,000) -> W9 (12,000): Lift = +20%
+            {"band_name": "Ellen May", "listener_count": 10000, "snapshot_week": "W8", "recorded_date": "2026-02-01"},
+            {"band_name": "Ellen May", "listener_count": 12000, "snapshot_week": "W9", "recorded_date": "2026-02-08"},
+            # Ellen May W10 (15,000) -> W11 (18,000): Lift = +20%
+            {"band_name": "Ellen May", "listener_count": 15000, "snapshot_week": "W10", "recorded_date": "2026-02-15"},
+            {"band_name": "Ellen May", "listener_count": 18000, "snapshot_week": "W11", "recorded_date": "2026-02-22"},
+            # Unshared Band
+            {"band_name": "Unshared Band", "listener_count": 5000, "snapshot_week": "W8", "recorded_date": "2026-02-01"},
+            {"band_name": "Unshared Band", "listener_count": 5200, "snapshot_week": "W9", "recorded_date": "2026-02-08"}
+        ])
+
+        upserted_records = []
+
+        def table_side_effect(name):
+            m = MagicMock()
+            if name == "weekly_submissions":
+                m.select.return_value.execute.return_value = mock_ws_exec
+            elif name == "playlist_history":
+                m.select.return_value.execute.return_value = mock_ph_exec
+            elif name == "band_listener_snapshot":
+                m.select.return_value.range.return_value.order.return_value.execute.return_value = mock_snap_exec
+            elif name == "band_analytics_summary":
+                def mock_upsert(record, on_conflict=None):
+                    upserted_records.append(record)
+                    return MagicMock()
+                m.upsert.side_effect = mock_upsert
+            return m
+
+        mock_supabase.table.side_effect = table_side_effect
+
+        scout.recalculate_analytics_summary()
+
+        # Find Ellen May summary
+        ellen_record = next((r for r in upserted_records if r["band_name"] == "Ellen May"), None)
+        self.assertIsNotNone(ellen_record)
+        self.assertEqual(ellen_record["total_shares"], 2)
+        self.assertTrue(ellen_record["was_shared"])
+        self.assertEqual(ellen_record["last_shared_week"], "W10")
+        self.assertEqual(ellen_record["listener_count_at_share"], 15000)
+        self.assertEqual(ellen_record["listener_count_1week_after_share"], 18000)
+        self.assertEqual(ellen_record["share_lift_pct"], 20.00)
+        self.assertEqual(ellen_record["share_lift_absolute"], 3000)
+        self.assertEqual(ellen_record["avg_growth_after_share_pct"], 20.00)
+
+        # Find Unshared Band summary
+        unshared_record = next((r for r in upserted_records if r["band_name"] == "Unshared Band"), None)
+        self.assertIsNotNone(unshared_record)
+        self.assertEqual(unshared_record["total_shares"], 0)
+        self.assertFalse(unshared_record["was_shared"])
+        self.assertIsNone(unshared_record["last_shared_week"])
+
 if __name__ == '__main__':
     unittest.main()
