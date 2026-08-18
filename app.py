@@ -440,7 +440,7 @@ def main():
                 }
                 this.adminSubmitting = true;
 
-                const lines = this.bulkCsv.trim().split('\n');
+                const lines = this.bulkCsv.trim().split(/\\r?\\n/);
                 const items = [];
                 const bandRegistryItems = [];
 
