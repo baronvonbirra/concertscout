@@ -194,6 +194,14 @@ CREATE TABLE IF NOT EXISTS band_analytics_summary (
     last_featured_week VARCHAR,
     total_features INT DEFAULT 0,
     days_tracked INT DEFAULT 0,
+    total_shares INT DEFAULT 0,
+    was_shared BOOLEAN DEFAULT false,
+    last_shared_week VARCHAR,
+    listener_count_at_share INT DEFAULT 0,
+    listener_count_1week_after_share INT DEFAULT 0,
+    share_lift_pct DECIMAL(10,2) DEFAULT 0.00,
+    share_lift_absolute INT DEFAULT 0,
+    avg_growth_after_share_pct DECIMAL(10,2) DEFAULT 0.00,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_band_analytics_summary_momentum ON band_analytics_summary (momentum_score DESC, latest_listener_count DESC);

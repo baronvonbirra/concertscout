@@ -1346,20 +1346,34 @@ def recalculate_analytics_summary():
     print("--- Recalculating Band Analytics Summary ---")
 
     # Fetch feature history per band from weekly_submissions & playlist_history
-    featured_history = {}  # band_lower -> {"first_week": str, "last_week": str, "count": int}
+    featured_history = {}  # band_lower -> {"weeks": set()}
+    share_history = {}     # band_lower -> list of dicts: {"week": str, "week_num": int, "created_at": str}
 
     try:
-        ws_res = supabase.table("weekly_submissions").select("band_name, week").execute()
+        ws_res = supabase.table("weekly_submissions").select("band_name, week, shared, created_at").execute()
         if ws_res.data:
             for r in ws_res.data:
                 bname = r.get("band_name", "").strip().lower()
                 week = r.get("week")
+                is_shared = r.get("shared", False)
+                c_at = r.get("created_at", "")
                 if bname and week:
                     if bname not in featured_history:
                         featured_history[bname] = {"weeks": set()}
                     featured_history[bname]["weeks"].add(week)
+
+                    if is_shared:
+                        if bname not in share_history:
+                            share_history[bname] = []
+                        match = re.search(r"\d+", str(week))
+                        w_num = int(match.group(0)) if match else 0
+                        share_history[bname].append({
+                            "week": str(week),
+                            "week_num": w_num,
+                            "created_at": c_at
+                        })
     except Exception as e:
-        print(f"Error reading weekly_submissions feature history: {e}")
+        print(f"Error reading weekly_submissions feature and share history: {e}")
 
     try:
         ph_res = supabase.table("playlist_history").select("artist_name, added_at").execute()
@@ -1499,6 +1513,70 @@ def recalculate_analytics_summary():
         last_feat_week = f_weeks[-1] if f_weeks else None
         tot_features = len(f_weeks)
 
+        # Share history and lift metrics
+        shares = share_history.get(b_lower, [])
+        total_shares = len(shares)
+        was_shared = total_shares > 0
+        last_shared_week = None
+        listener_count_at_share = 0
+        listener_count_1week_after_share = 0
+        share_lift_pct = 0.00
+        share_lift_absolute = 0
+        avg_growth_after_share_pct = 0.00
+
+        if was_shared:
+            # Sort shares chronologically by week_num then created_at
+            shares.sort(key=lambda x: (x["week_num"], x["created_at"]))
+            last_shared_week = shares[-1]["week"]
+
+            lifts = []
+            latest_valid_lift = None
+
+            for share in shares:
+                s_week = share["week"]
+                s_num = share["week_num"]
+
+                # Find snapshot for share week
+                share_snap = next((s for s in snaps if s.get("snapshot_week") == s_week), None)
+                if not share_snap and s_num > 0:
+                    share_snap = next((s for s in snaps if re.search(r"\d+", str(s.get("snapshot_week") or "")) and int(re.search(r"\d+", str(s.get("snapshot_week"))).group(0)) == s_num), None)
+
+                # Find snapshot for week after share
+                next_snap = next((s for s in snaps if s.get("snapshot_week") == f"W{s_num + 1}"), None)
+                if not next_snap and share_snap:
+                    try:
+                        s_dt = datetime.strptime(str(share_snap.get("recorded_date"))[:10], "%Y-%m-%d").date()
+                        for ns in snaps:
+                            ns_dt = datetime.strptime(str(ns.get("recorded_date"))[:10], "%Y-%m-%d").date()
+                            if 5 <= (ns_dt - s_dt).days <= 10:
+                                next_snap = ns
+                                break
+                    except Exception:
+                        pass
+
+                if share_snap and next_snap:
+                    at_cnt = int(share_snap.get("listener_count", 0))
+                    after_cnt = int(next_snap.get("listener_count", 0))
+                    if at_cnt > 0:
+                        l_pct = round(((after_cnt - at_cnt) / float(at_cnt)) * 100.0, 2)
+                        l_abs = after_cnt - at_cnt
+                        lifts.append(l_pct)
+                        latest_valid_lift = {
+                            "at": at_cnt,
+                            "after": after_cnt,
+                            "pct": l_pct,
+                            "abs": l_abs
+                        }
+
+            if lifts:
+                avg_growth_after_share_pct = round(sum(lifts) / float(len(lifts)), 2)
+
+            if latest_valid_lift:
+                listener_count_at_share = latest_valid_lift["at"]
+                listener_count_1week_after_share = latest_valid_lift["after"]
+                share_lift_pct = latest_valid_lift["pct"]
+                share_lift_absolute = latest_valid_lift["abs"]
+
         summary_payload = {
             "band_name": bname,
             "spotify_id": sp_id,
@@ -1516,6 +1594,14 @@ def recalculate_analytics_summary():
             "last_featured_week": last_feat_week,
             "total_features": tot_features,
             "days_tracked": days_tracked,
+            "total_shares": total_shares,
+            "was_shared": was_shared,
+            "last_shared_week": last_shared_week,
+            "listener_count_at_share": listener_count_at_share,
+            "listener_count_1week_after_share": listener_count_1week_after_share,
+            "share_lift_pct": float(share_lift_pct),
+            "share_lift_absolute": share_lift_absolute,
+            "avg_growth_after_share_pct": float(avg_growth_after_share_pct),
             "updated_at": datetime.now().isoformat()
         }
 
