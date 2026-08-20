@@ -450,6 +450,105 @@ def main():
                 };
             },
 
+            getBandShareDecision(bandName) {
+                if (!bandName || !bandName.trim()) {
+                    return {
+                        appearances: 0,
+                        times_shared: 0,
+                        success_rate_pct: 0,
+                        total_saves: 0,
+                        avg_interaction: 0,
+                        share_pattern: 'never_shared',
+                        recommendation: '🤔 NEUTRAL (Enter band name)',
+                        tier: 'Tier 0: Neutral',
+                        emoji: '🤔',
+                        badge_bg: 'bg-gray-200',
+                        badge_text: 'text-gray-800'
+                    };
+                }
+
+                const nameLower = bandName.trim().toLowerCase();
+                const bandSubs = this.weeklySubmissions.filter(s => s.band_name && s.band_name.toLowerCase() === nameLower);
+                const appearances = bandSubs.length;
+                const times_shared = bandSubs.filter(s => s.shared).length;
+                const total_saves = bandSubs.reduce((sum, s) => sum + (s.total_saves || 0), 0);
+                const total_interaction = bandSubs.reduce((sum, s) => sum + (s.interaction_score || 0), 0);
+                const avg_interaction = appearances > 0 ? (total_interaction / appearances) : 0;
+                const success_rate_pct = appearances > 0 ? Math.round((times_shared / appearances) * 100) : 0;
+
+                // Also check analytics summary if available
+                const summaryMatch = this.analyticsSummary.find(b => b.band_name && b.band_name.toLowerCase() === nameLower);
+
+                let share_pattern = 'never_shared';
+                if (times_shared === 0) {
+                    share_pattern = 'never_shared';
+                } else if (appearances > 0 && times_shared >= appearances * 0.8) {
+                    share_pattern = 'always_share';
+                } else if (appearances > 0 && times_shared >= appearances * 0.5) {
+                    share_pattern = 'often_share';
+                } else {
+                    share_pattern = 'rarely_share';
+                }
+
+                let recommendation = '🤔 NEUTRAL';
+                let tier = 'Tier 0: Neutral';
+                let emoji = '🤔';
+                let badge_bg = 'bg-gray-200';
+                let badge_text = 'text-gray-900';
+
+                if (share_pattern === 'always_share' || (times_shared > 0 && avg_interaction >= 1.8)) {
+                    recommendation = '🚀 DEFINITE YES (proven)';
+                    tier = 'Tier 1: Definite Yes';
+                    emoji = '🚀';
+                    badge_bg = 'bg-green-300';
+                    badge_text = 'text-green-950';
+                } else if (share_pattern === 'often_share' || (times_shared > 0 && total_saves > 80)) {
+                    recommendation = '✅ LIKELY YES (track record)';
+                    tier = 'Tier 2: Likely Yes';
+                    emoji = '✅';
+                    badge_bg = 'bg-lime-300';
+                    badge_text = 'text-lime-950';
+                } else if (share_pattern === 'never_shared' && total_saves > 100) {
+                    recommendation = '⚡ MAYBE (unproven but hot)';
+                    tier = 'Tier 3: Maybe';
+                    emoji = '⚡';
+                    badge_bg = 'bg-amber-300';
+                    badge_text = 'text-amber-950';
+                } else if (share_pattern === 'never_shared' && appearances >= 2) {
+                    recommendation = '💭 MAYBE (let it cook more)';
+                    tier = 'Tier 4: Let It Cook';
+                    emoji = '💭';
+                    badge_bg = 'bg-blue-200';
+                    badge_text = 'text-blue-950';
+                } else if (share_pattern === 'rarely_share') {
+                    recommendation = '❌ SKIP (low track record)';
+                    tier = 'Tier 5: Skip';
+                    emoji = '❌';
+                    badge_bg = 'bg-red-300';
+                    badge_text = 'text-red-950';
+                } else if (appearances === 0) {
+                    recommendation = '✨ NEW BAND (first time feature)';
+                    tier = 'Tier 0: New Band';
+                    emoji = '✨';
+                    badge_bg = 'bg-purple-200';
+                    badge_text = 'text-purple-950';
+                }
+
+                return {
+                    appearances,
+                    times_shared,
+                    success_rate_pct,
+                    total_saves,
+                    avg_interaction: avg_interaction.toFixed(2),
+                    share_pattern,
+                    recommendation,
+                    tier,
+                    emoji,
+                    badge_bg,
+                    badge_text
+                };
+            },
+
             openBandModal(band) {
                 this.selectedBandAnalytics = band;
                 this.bandModalOpen = true;
@@ -521,6 +620,8 @@ def main():
                 this.adminSubmitting = true;
                 this.adminSuccess = false;
 
+                const decision = this.getBandShareDecision(this.subBandName);
+
                 const payload = {
                     week: this.subWeek,
                     band_name: this.subBandName.trim(),
@@ -530,6 +631,7 @@ def main():
                     interaction_type: this.subInteractionType,
                     interaction_score: this.calcScore(this.subInteractionType),
                     shared: this.subInteractionType.includes('shared'),
+                    share_recommendation: decision.recommendation,
                     notes: this.subNotes || null
                 };
 
@@ -600,6 +702,8 @@ def main():
                     const interaction_type = parts[5] || 'none';
                     const notes = parts[6] || null;
 
+                    const decision = this.getBandShareDecision(band_name);
+
                     items.push({
                         week,
                         band_name,
@@ -609,6 +713,7 @@ def main():
                         interaction_type,
                         interaction_score: this.calcScore(interaction_type),
                         shared: interaction_type.includes('shared'),
+                        share_recommendation: decision.recommendation,
                         notes
                     });
 
@@ -1185,6 +1290,66 @@ def main():
                         </table>
                     </div>
 
+                    <!-- Master Share Decision Matrix Widget (The 5 Tiers) -->
+                    <div class="brutal-card p-6 bg-white text-black">
+                        <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
+                            <span>🎯 MASTER SHARE DECISION MATRIX (5 TIERS)</span>
+                            <span class="mono text-xs text-gray-500 font-normal">Analytics & Historical Curation Rules</span>
+                        </h3>
+
+                        <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+                            <div class="p-3 bg-green-100 border-2 border-black mono">
+                                <p class="text-[10px] text-green-900 font-bold uppercase">TIER 1: DEFINITE YES 🚀</p>
+                                <p class="bebas text-xl mt-1 text-green-950">Proven engagement</p>
+                                <p class="text-[9px] text-gray-600 mt-1">Shared before & Avg Score &ge; 1.8</p>
+                            </div>
+                            <div class="p-3 bg-lime-100 border-2 border-black mono">
+                                <p class="text-[10px] text-lime-900 font-bold uppercase">TIER 2: LIKELY YES ✅</p>
+                                <p class="bebas text-xl mt-1 text-lime-950">Track record</p>
+                                <p class="text-[9px] text-gray-600 mt-1">Shared before & Saves &gt; 80</p>
+                            </div>
+                            <div class="p-3 bg-amber-100 border-2 border-black mono">
+                                <p class="text-[10px] text-amber-900 font-bold uppercase">TIER 3: MAYBE ⚡</p>
+                                <p class="bebas text-xl mt-1 text-amber-950">Unproven but hot</p>
+                                <p class="text-[9px] text-gray-600 mt-1">Never shared & Saves &gt; 100</p>
+                            </div>
+                            <div class="p-3 bg-blue-100 border-2 border-black mono">
+                                <p class="text-[10px] text-blue-900 font-bold uppercase">TIER 4: LET IT COOK 💭</p>
+                                <p class="bebas text-xl mt-1 text-blue-950">Building momentum</p>
+                                <p class="text-[9px] text-gray-600 mt-1">Never shared & Featured &ge; 2x</p>
+                            </div>
+                            <div class="p-3 bg-red-100 border-2 border-black mono">
+                                <p class="text-[10px] text-red-900 font-bold uppercase">TIER 5: SKIP ❌</p>
+                                <p class="bebas text-xl mt-1 text-red-950">Low track record</p>
+                                <p class="text-[9px] text-gray-600 mt-1">Featured multiple times, low response</p>
+                            </div>
+                        </div>
+
+                        <!-- Band Evaluator Quick Search in Matrix -->
+                        <div x-data="{ evalBand: 'Ellen May' }" class="p-4 bg-gray-900 text-white border-2 border-black">
+                            <label class="block mono text-xs font-bold uppercase mb-2 text-[#CCFF00]">EVALUATE ANY BAND AGAINST FRAMEWORK:</label>
+                            <div class="flex flex-col sm:flex-row gap-3">
+                                <input type="text" x-model="evalBand" placeholder="Type band name (e.g. RATSALAD)..." class="flex-1 bg-black text-white p-2 border border-white mono text-sm">
+                            </div>
+
+                            <div class="mt-4 p-3 bg-white text-black border-2 border-black flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                                <div>
+                                    <h4 class="bebas text-3xl leading-none" x-text="evalBand || 'Band Name'"></h4>
+                                    <p class="mono text-xs text-gray-600 mt-1 uppercase">
+                                        Featured: <strong x-text="getBandShareDecision(evalBand).appearances + 'x'"></strong> &middot;
+                                        Shared: <strong x-text="getBandShareDecision(evalBand).times_shared + 'x'"></strong> &middot;
+                                        Success Rate: <strong x-text="getBandShareDecision(evalBand).success_rate_pct + '%'"></strong> &middot;
+                                        Saves: <strong x-text="getBandShareDecision(evalBand).total_saves"></strong> &middot;
+                                        Avg Score: <strong x-text="getBandShareDecision(evalBand).avg_interaction"></strong>
+                                    </p>
+                                </div>
+                                <span :class="getBandShareDecision(evalBand).badge_bg + ' ' + getBandShareDecision(evalBand).badge_text"
+                                      class="px-4 py-2 font-bold border-2 border-black bebas text-xl uppercase tracking-wide"
+                                      x-text="getBandShareDecision(evalBand).recommendation"></span>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Grid: Recommendations & High ROI Shares -->
                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
                         <!-- Next Share Recommendations Widget -->
@@ -1426,19 +1591,38 @@ def main():
                             </div>
                         </div>
 
-                        <!-- Score & Share History Preview -->
-                        <div class="mt-4 p-3 bg-gray-100 border-2 border-black space-y-2 mono text-sm">
-                            <div class="flex justify-between items-center">
-                                <span>AUTO-CALCULATED SCORE: <strong x-text="currentScore"></strong></span>
-                                <span>DERIVED SHARED: <strong x-text="currentShared ? 'YES' : 'NO'"></strong></span>
+                        <!-- Share Decision Framework Live Card Preview -->
+                        <div class="mt-4 p-4 border-4 border-black bg-yellow-50 space-y-3 mono text-xs shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                            <div class="flex justify-between items-center border-b-2 border-black pb-2">
+                                <span class="font-bold text-sm uppercase">🎯 SHARE DECISION RECOMMENDATION:</span>
+                                <span :class="getBandShareDecision(subBandName).badge_bg + ' ' + getBandShareDecision(subBandName).badge_text"
+                                      class="px-3 py-1 font-bold border border-black text-xs uppercase"
+                                      x-text="getBandShareDecision(subBandName).recommendation"></span>
                             </div>
-                            <template x-if="getBandShareHistory(subBandName)">
-                                <div class="p-2 bg-yellow-100 border border-black text-xs">
-                                    <span class="font-bold">SHARED HISTORY FOR <span x-text="subBandName.toUpperCase()"></span>:</span>
-                                    Shared <strong x-text="getBandShareHistory(subBandName).total_shares"></strong> times &middot;
-                                    Last shared: <strong x-text="getBandShareHistory(subBandName).last_shared_week"></strong>
+
+                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                                <div class="p-2 bg-white border border-black">
+                                    <p class="text-[10px] text-gray-500 uppercase font-bold">Featured</p>
+                                    <p class="bebas text-xl" x-text="getBandShareDecision(subBandName).appearances + 'x'"></p>
                                 </div>
-                            </template>
+                                <div class="p-2 bg-white border border-black">
+                                    <p class="text-[10px] text-gray-500 uppercase font-bold">Shared</p>
+                                    <p class="bebas text-xl" x-text="getBandShareDecision(subBandName).times_shared + 'x'"></p>
+                                </div>
+                                <div class="p-2 bg-white border border-black">
+                                    <p class="text-[10px] text-gray-500 uppercase font-bold">Success Rate</p>
+                                    <p class="bebas text-xl text-green-700" x-text="getBandShareDecision(subBandName).success_rate_pct + '%'"></p>
+                                </div>
+                                <div class="p-2 bg-white border border-black">
+                                    <p class="text-[10px] text-gray-500 uppercase font-bold">Avg Score</p>
+                                    <p class="bebas text-xl text-purple-700" x-text="getBandShareDecision(subBandName).avg_interaction"></p>
+                                </div>
+                            </div>
+
+                            <div class="flex justify-between items-center text-xs pt-1 border-t border-black">
+                                <span>Score: <strong x-text="currentScore"></strong> &middot; Derived Shared: <strong x-text="currentShared ? 'YES' : 'NO'"></strong></span>
+                                <span class="font-bold text-gray-700" x-text="'Tier: ' + getBandShareDecision(subBandName).tier"></span>
+                            </div>
                         </div>
 
                         <button @click="submitSingle()" :disabled="adminSubmitting"
