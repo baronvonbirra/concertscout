@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS weekly_submissions (
     interaction_type VARCHAR DEFAULT 'none',
     interaction_score INT DEFAULT 0,
     shared BOOLEAN DEFAULT false,
+    share_recommendation VARCHAR,
     notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
