@@ -152,12 +152,18 @@ def get_monthly_listeners(artist_id):
     _monthly_listeners_cache[artist_id] = 0
     return 0
 
-def discover_punk_candidates(token):
-    print("--- Starting Candidate Discovery and Classification (Phase 2 Spec) ---")
+def discover_punk_candidates(token, window_days=7, existing_candidates=None):
+    print(f"--- Starting Candidate Discovery and Classification (Release window: past {window_days} days) ---")
     headers = {"Authorization": f"Bearer {token}"}
-    candidates = {}
+    if existing_candidates is None:
+        candidates = {}
+    elif isinstance(existing_candidates, list):
+        candidates = {c["track_id"]: dict(c) for c in existing_candidates}
+    else:
+        candidates = {k: dict(v) for k, v in existing_candidates.items()}
 
     execution_date = datetime.now().date()
+    effective_start_date = execution_date - timedelta(days=window_days)
 
     def parse_release_date(date_str):
         if not date_str:
@@ -214,93 +220,86 @@ def discover_punk_candidates(token):
                         "spotify_id": artist_id
                     }
 
-    # Dynamic release window expansion tiers: 7 days, then 14 days, then 30 days
-    release_window_tiers = [7, 14, 30]
-
     genres = [
         "punk", "punk rock", "pop punk", "hardcore", "skate punk",
         "post-punk", "melodic hardcore", "hardcore punk", "garage punk", "emo", "ska", "celtic punk"
     ]
 
-    for window_days in release_window_tiers:
-        effective_start_date = execution_date - timedelta(days=window_days)
-        print(f"Searching Spotify candidate tracks (Release window: past {window_days} days, start date: {effective_start_date})...")
+    print(f"Searching Spotify candidate tracks (Release window: past {window_days} days, start date: {effective_start_date})...")
 
-        # 1. Search across expanded punk genres with pagination & tag/year queries
-        for genre in genres:
-            query_templates = [
-                f'genre:"{genre}"',
-                f'genre:"{genre}" tag:new',
-                f'genre:"{genre}" year:{execution_date.year}'
-            ]
-            for query in query_templates:
-                for offset in [0, 50]:
-                    url = "https://api.spotify.com/v1/search"
-                    params = {
-                        "q": query,
-                        "type": "track",
-                        "market": "ES",
-                        "limit": 50,
-                        "offset": offset
-                    }
-                    time.sleep(0.5)
-                    try:
-                        res = requests.get(url, headers=headers, params=params, timeout=10)
-                        if res.status_code == 200:
-                            tracks = res.json().get("tracks", {}).get("items", [])
-                            for track in tracks:
-                                process_track_item(track, effective_start_date)
-                    except Exception as e:
-                        print(f"Error performing search for '{query}' offset {offset}: {e}")
+    # 1. Search across expanded punk genres with pagination & tag/year queries
+    for genre in genres:
+        query_templates = [
+            f'genre:"{genre}"',
+            f'genre:"{genre}" tag:new',
+            f'genre:"{genre}" year:{execution_date.year}'
+        ]
+        for query in query_templates:
+            for offset in [0, 50]:
+                url = "https://api.spotify.com/v1/search"
+                params = {
+                    "q": query,
+                    "type": "track",
+                    "market": "ES",
+                    "limit": 50,
+                    "offset": offset
+                }
+                time.sleep(0.5)
+                try:
+                    res = requests.get(url, headers=headers, params=params, timeout=10)
+                    if res.status_code == 200:
+                        tracks = res.json().get("tracks", {}).get("items", [])
+                        for track in tracks:
+                            process_track_item(track, effective_start_date)
+                except Exception as e:
+                    print(f"Error performing search for '{query}' offset {offset}: {e}")
 
-        # 2. Query Spotify Browse New Releases API
-        for offset in [0, 50]:
-            browse_url = "https://api.spotify.com/v1/browse/new-releases"
-            browse_params = {"country": "ES", "limit": 50, "offset": offset}
-            time.sleep(0.5)
-            try:
-                b_res = requests.get(browse_url, headers=headers, params=browse_params, timeout=10)
-                if b_res.status_code == 200:
-                    albums = b_res.json().get("albums", {}).get("items", [])
-                    for album in albums:
-                        album_id = album.get("id")
-                        album_name = album.get("name", "")
-                        release_date_str = album.get("release_date")
-                        # Fetch album tracks if album might match punk or new release
-                        if album_id and parse_release_date(release_date_str) and parse_release_date(release_date_str) >= effective_start_date:
-                            t_url = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
-                            time.sleep(0.5)
-                            t_res = requests.get(t_url, headers=headers, params={"limit": 10}, timeout=10)
-                            if t_res.status_code == 200:
-                                a_tracks = t_res.json().get("items", [])
-                                for tr in a_tracks:
-                                    # Attach album info to track object for process_track_item
-                                    tr["album"] = {"name": album_name, "release_date": release_date_str}
-                                    process_track_item(tr, effective_start_date)
-            except Exception as e:
-                print(f"Error fetching browse new releases offset {offset}: {e}")
+    # 2. Query Spotify Browse New Releases API
+    for offset in [0, 50]:
+        browse_url = "https://api.spotify.com/v1/browse/new-releases"
+        browse_params = {"country": "ES", "limit": 50, "offset": offset}
+        time.sleep(0.5)
+        try:
+            b_res = requests.get(browse_url, headers=headers, params=browse_params, timeout=10)
+            if b_res.status_code == 200:
+                albums = b_res.json().get("albums", {}).get("items", [])
+                for album in albums:
+                    album_id = album.get("id")
+                    album_name = album.get("name", "")
+                    release_date_str = album.get("release_date")
+                    if album_id and parse_release_date(release_date_str) and parse_release_date(release_date_str) >= effective_start_date:
+                        t_url = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
+                        time.sleep(0.5)
+                        t_res = requests.get(t_url, headers=headers, params={"limit": 10}, timeout=10)
+                        if t_res.status_code == 200:
+                            a_tracks = t_res.json().get("items", [])
+                            for tr in a_tracks:
+                                tr["album"] = {"name": album_name, "release_date": release_date_str}
+                                process_track_item(tr, effective_start_date)
+        except Exception as e:
+            print(f"Error fetching browse new releases offset {offset}: {e}")
 
-        print(f"Discovered {len(candidates)} candidates matching past {window_days}-day release window.")
-        if len(candidates) >= 15:
-            break
+    print(f"Discovered {len(candidates)} candidates matching past {window_days}-day release window.")
 
     classified_candidates = []
 
     for t_id, item in candidates.items():
-        artist_id = item["artist_id"]
-        listeners = get_monthly_listeners(artist_id)
+        if "tier" not in item:
+            artist_id = item["artist_id"]
+            listeners = get_monthly_listeners(artist_id)
 
-        if listeners > 100000:
-            tier = "Major"
-        elif listeners >= 10000:
-            tier = "Mid"
-        elif listeners >= 1000:
-            tier = "Indie"
-        else:
-            tier = "Emerging"
+            if listeners > 100000:
+                tier = "Major"
+            elif listeners >= 10000:
+                tier = "Mid"
+            elif listeners >= 1000:
+                tier = "Indie"
+            else:
+                tier = "Emerging"
 
-        item["monthly_listeners"] = listeners
-        item["tier"] = tier
+            item["monthly_listeners"] = listeners
+            item["tier"] = tier
+
         classified_candidates.append(item)
 
     return classified_candidates
@@ -387,9 +386,8 @@ def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, cu
 
     active_playlist_artists = set(existing_playlist_artists) if existing_playlist_artists else set()
 
-    # Multi-stage relaxation ladder for exclusion window: 10 weeks -> 4 weeks -> 0 weeks (no recency cap)
-    # Relaxation only triggers if candidate pool has at least 10 candidates to reach the 10-track target
-    exclusion_tiers = [10, 4, 0]
+    # Multi-stage relaxation ladder for exclusion window: 10 weeks -> 6 weeks -> 4 weeks -> 2 weeks -> 0 weeks (no recency cap)
+    exclusion_tiers = [10, 6, 4, 2, 0]
     selected_tracks = []
     seen_bands = set()
     total_unique_candidate_bands = len({c["artist_name"].lower() for c in sorted_candidates})
@@ -462,17 +460,10 @@ def generate_monday_playlist():
         print("because Client Credentials cannot write to playlists. Please configure a valid SPOTIFY_REFRESH_TOKEN.")
         print("="*80 + "\n")
 
-    # 2. Discover candidates
-    try:
-        candidates = discover_punk_candidates(token)
-    except Exception as e:
-        print(f"Error during candidate discovery: {e}")
-        return
-
     playlist_id = "2ZqhNVOPmA3Nf0SRpzJ9Yz"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    # 3. Playlist Pruning check & gather active artists already in playlist
+    # 2. Playlist Pruning check & gather active artists already in playlist upfront
     print("Checking playlist tracks for pruning (>84 days old) and current artists...")
     tracks_to_prune = []
     existing_playlist_artists = set()
@@ -508,16 +499,26 @@ def generate_monday_playlist():
     except Exception as e:
         print(f"Error during playlist pruning check: {e}")
 
-    # 4. Track selection
-    try:
-        selected = select_weekly_playlist_tracks(candidates, existing_playlist_artists=existing_playlist_artists)
-    except Exception as e:
-        print(f"Error during track selection: {e}")
-        return
+    # 3. Progressive release window expansion: 7 days -> 14 -> 30 -> 60 -> 90 -> 180 days
+    window_tiers = [7, 14, 30, 60, 90, 180]
+    candidates = []
+    selected = []
+
+    for w_days in window_tiers:
+        try:
+            candidates = discover_punk_candidates(token, window_days=w_days, existing_candidates=candidates)
+            selected = select_weekly_playlist_tracks(candidates, existing_playlist_artists=existing_playlist_artists)
+            if len(selected) >= 10:
+                print(f"Successfully selected {len(selected)} tracks at release window past {w_days} days!")
+                break
+            else:
+                print(f"Release window past {w_days} days yielded {len(selected)} selected tracks (< 10 target). Expanding release window...")
+        except Exception as e:
+            print(f"Error during candidate discovery/selection for window past {w_days} days: {e}")
 
     if len(selected) < 10:
         print(f"\n" + "="*80)
-        print(f"🚨 ALERT / FAILURE: Could only find {len(selected)} tracks meeting all Phase 2 rules.")
+        print(f"🚨 ALERT / FAILURE: Could only find {len(selected)} tracks meeting all Phase 2 rules across all release windows up to 180 days.")
         print("Rule requirement: Must hit exactly 10 songs. Halting workflow (no tracks added to Spotify).")
         print("="*80 + "\n")
         return
