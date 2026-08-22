@@ -1333,10 +1333,12 @@ def take_band_listener_snapshots():
         }
 
         try:
-            supabase.table("band_listener_snapshot").insert(snapshot_payload).execute()
+            supabase.table("band_listener_snapshot").upsert(
+                snapshot_payload, on_conflict="band_name,recorded_date"
+            ).execute()
             success_count += 1
         except Exception as e:
-            print(f"Error inserting snapshot for '{bname}': {e}")
+            print(f"Error upserting snapshot for '{bname}': {e}")
             fail_count += 1
 
     total_attempted = success_count + fail_count

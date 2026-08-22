@@ -306,6 +306,45 @@ class TestScoutV2(unittest.TestCase):
         self.assertEqual(len(upserted_records), 1)
         self.assertEqual(upserted_records[0]["latest_listener_count"], 0)
 
+    @patch('scout.supabase')
+    @patch('scout.get_monthly_listeners')
+    def test_take_band_listener_snapshots_upsert(self, mock_listeners, mock_supabase):
+        mock_listeners.return_value = 5000
+
+        mock_ws_exec = MagicMock(data=[{"band_name": "Swayze"}])
+        mock_br_exec = MagicMock(data=[])
+        mock_ph_exec = MagicMock(data=[])
+        mock_art_exec = MagicMock(data=[])
+
+        upsert_calls = []
+
+        def table_side_effect(name):
+            m = MagicMock()
+            if name == "weekly_submissions":
+                m.select.return_value.execute.return_value = mock_ws_exec
+            elif name == "band_registry":
+                m.select.return_value.execute.return_value = mock_br_exec
+            elif name == "playlist_history":
+                m.select.return_value.execute.return_value = mock_ph_exec
+            elif name == "artists":
+                m.select.return_value.eq.return_value.execute.return_value = mock_art_exec
+            elif name == "band_listener_snapshot":
+                def mock_upsert(payload, on_conflict=None):
+                    upsert_calls.append((payload, on_conflict))
+                    return MagicMock()
+                m.upsert.side_effect = mock_upsert
+            return m
+
+        mock_supabase.table.side_effect = table_side_effect
+
+        with patch('scout.search_spotify_artist', return_value=('spot_123', 100)):
+            scout.take_band_listener_snapshots()
+
+        self.assertEqual(len(upsert_calls), 1)
+        payload, on_conflict = upsert_calls[0]
+        self.assertEqual(payload["band_name"], "Swayze")
+        self.assertEqual(on_conflict, "band_name,recorded_date")
+
     @patch('scout.requests.get')
     def test_get_monthly_listeners_bot_user_agent(self, mock_get):
         mock_res = MagicMock()
