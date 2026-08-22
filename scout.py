@@ -40,6 +40,12 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
 ]
 
+BOT_USER_AGENTS = [
+    "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+    "Twitterbot/1.0",
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+]
+
 RATE_LIMIT_DELAY = 0.5
 
 # Circuit breaker flags to prevent hammering when blocked
@@ -88,40 +94,41 @@ def get_monthly_listeners(artist_id):
         return _monthly_listeners_cache[artist_id]
 
     url = f"https://open.spotify.com/artist/{artist_id}"
-    headers = {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept-Language": "en-US,en;q=0.9"
-    }
 
     # Scout V2.0 rule: mandatory 0.5-second delay before all external API calls
     time.sleep(0.5)
 
-    try:
-        # Avoid circuit breaker if possible but respect connection errors
-        res = requests.get(url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, "html.parser")
-            meta = soup.find("meta", property="og:description")
-            if not meta:
-                meta = soup.find("meta", attrs={"name": "description"})
-            if meta:
-                content = meta.get("content", "")
-                match = re.search(r"([\d.,MKB]+)\s+monthly\s+listeners", content, re.IGNORECASE)
-                if match:
-                    listeners_str = match.group(1).replace(",", "")
-                    if "M" in listeners_str.upper():
-                        val = float(listeners_str.upper().replace("M", "")) * 1_000_000
-                    elif "K" in listeners_str.upper():
-                        val = float(listeners_str.upper().replace("K", "")) * 1_000
-                    elif "B" in listeners_str.upper():
-                        val = float(listeners_str.upper().replace("B", "")) * 1_000_000_000
-                    else:
-                        val = float(listeners_str)
-                    count = int(val)
-                    _monthly_listeners_cache[artist_id] = count
-                    return count
-    except Exception as e:
-        print(f"Error scraping monthly listeners for artist {artist_id}: {e}")
+    # Try bot User-Agents first as Spotify returns OG description with monthly listeners for social crawlers
+    for ua in BOT_USER_AGENTS:
+        headers = {
+            "User-Agent": ua,
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                soup = BeautifulSoup(res.text, "html.parser")
+                meta = soup.find("meta", property="og:description")
+                if not meta:
+                    meta = soup.find("meta", attrs={"name": "description"})
+                if meta:
+                    content = meta.get("content", "")
+                    match = re.search(r"([\d.,MKB]+)\s+monthly\s+listeners", content, re.IGNORECASE)
+                    if match:
+                        listeners_str = match.group(1).replace(",", "")
+                        if "M" in listeners_str.upper():
+                            val = float(listeners_str.upper().replace("M", "")) * 1_000_000
+                        elif "K" in listeners_str.upper():
+                            val = float(listeners_str.upper().replace("K", "")) * 1_000
+                        elif "B" in listeners_str.upper():
+                            val = float(listeners_str.upper().replace("B", "")) * 1_000_000_000
+                        else:
+                            val = float(listeners_str)
+                        count = int(val)
+                        _monthly_listeners_cache[artist_id] = count
+                        return count
+        except Exception as e:
+            print(f"Error scraping monthly listeners for artist {artist_id}: {e}")
 
     # Fallback mechanism: fetch the artist's followers count from the official Spotify Web API
     token = get_spotify_token()
@@ -1185,13 +1192,13 @@ def determine_trajectory(snapshots_desc):
     if not snapshots_desc:
         return "flat"
     if len(snapshots_desc) == 1:
-        count = snapshots_desc[0].get("listener_count", 0)
+        count = snapshots_desc[0].get("listener_count") or 0
         return "steady" if count > 0 else "flat"
 
-    recent = snapshots_desc[0].get("listener_count", 0)
+    recent = snapshots_desc[0].get("listener_count") or 0
     # Compare with snapshot from 4+ positions back, or oldest available
     compare_idx = 4 if len(snapshots_desc) > 4 else len(snapshots_desc) - 1
-    previous = snapshots_desc[compare_idx].get("listener_count", 0)
+    previous = snapshots_desc[compare_idx].get("listener_count") or 0
 
     if previous <= 0:
         return "explosive" if recent > 0 else "flat"
@@ -1433,13 +1440,13 @@ def recalculate_analytics_summary():
         sp_id = latest_snap.get("spotify_id") or first_snap.get("spotify_id")
         first_date_str = str(first_snap.get("recorded_date", ""))
         latest_date_str = str(latest_snap.get("recorded_date", ""))
-        latest_count = int(latest_snap.get("listener_count", 0))
+        latest_count = int(latest_snap.get("listener_count") or 0)
 
         # Peak calculation
         peak_count = 0
         peak_date_str = latest_date_str
         for s in snaps:
-            lc = int(s.get("listener_count", 0))
+            lc = int(s.get("listener_count") or 0)
             if lc >= peak_count:
                 peak_count = lc
                 peak_date_str = str(s.get("recorded_date", ""))
@@ -1468,7 +1475,7 @@ def recalculate_analytics_summary():
             if not prev_7d_snap:
                 prev_7d_snap = snaps[-2]
 
-            prev_count = int(prev_7d_snap.get("listener_count", 0))
+            prev_count = int(prev_7d_snap.get("listener_count") or 0)
             if prev_count > 0:
                 wow_growth = round(((latest_count - prev_count) / float(prev_count)) * 100.0, 2)
 
@@ -1489,12 +1496,12 @@ def recalculate_analytics_summary():
                 prev_30d_snap = snaps[0]
 
             if prev_30d_snap:
-                prev_m_count = int(prev_30d_snap.get("listener_count", 0))
+                prev_m_count = int(prev_30d_snap.get("listener_count") or 0)
                 if prev_m_count > 0:
                     mom_growth = round(((latest_count - prev_m_count) / float(prev_m_count)) * 100.0, 2)
 
         # Total growth since first snapshot
-        first_count = int(first_snap.get("listener_count", 0))
+        first_count = int(first_snap.get("listener_count") or 0)
         if first_count > 0:
             total_growth = round(((latest_count - first_count) / float(first_count)) * 100.0, 2)
         else:
@@ -1555,8 +1562,8 @@ def recalculate_analytics_summary():
                         pass
 
                 if share_snap and next_snap:
-                    at_cnt = int(share_snap.get("listener_count", 0))
-                    after_cnt = int(next_snap.get("listener_count", 0))
+                    at_cnt = int(share_snap.get("listener_count") or 0)
+                    after_cnt = int(next_snap.get("listener_count") or 0)
                     if at_cnt > 0:
                         l_pct = round(((after_cnt - at_cnt) / float(at_cnt)) * 100.0, 2)
                         l_abs = after_cnt - at_cnt

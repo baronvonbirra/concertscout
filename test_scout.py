@@ -272,5 +272,50 @@ class TestScoutV2(unittest.TestCase):
         self.assertFalse(unshared_record["was_shared"])
         self.assertIsNone(unshared_record["last_shared_week"])
 
+    @patch('scout.supabase')
+    def test_recalculate_analytics_summary_with_none_values(self, mock_supabase):
+        mock_table = MagicMock()
+        mock_ws_exec = MagicMock(data=[])
+        mock_ph_exec = MagicMock(data=[])
+        mock_snap_exec = MagicMock(data=[
+            {"band_name": "Null Band", "listener_count": None, "snapshot_week": "W1", "recorded_date": "2026-02-01"},
+            {"band_name": "Null Band", "listener_count": None, "snapshot_week": "W2", "recorded_date": "2026-02-08"}
+        ])
+
+        upserted_records = []
+
+        def table_side_effect(name):
+            m = MagicMock()
+            if name == "weekly_submissions":
+                m.select.return_value.execute.return_value = mock_ws_exec
+            elif name == "playlist_history":
+                m.select.return_value.execute.return_value = mock_ph_exec
+            elif name == "band_listener_snapshot":
+                m.select.return_value.range.return_value.order.return_value.execute.return_value = mock_snap_exec
+            elif name == "band_analytics_summary":
+                def mock_upsert(record, on_conflict=None):
+                    upserted_records.append(record)
+                    return MagicMock()
+                m.upsert.side_effect = mock_upsert
+            return m
+
+        mock_supabase.table.side_effect = table_side_effect
+
+        # Should execute without throwing TypeError
+        scout.recalculate_analytics_summary()
+        self.assertEqual(len(upserted_records), 1)
+        self.assertEqual(upserted_records[0]["latest_listener_count"], 0)
+
+    @patch('scout.requests.get')
+    def test_get_monthly_listeners_bot_user_agent(self, mock_get):
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.text = '<html><head><meta property="og:description" content="Artist · 121.1K monthly listeners."/></head></html>'
+        mock_get.return_value = mock_res
+
+        scout._monthly_listeners_cache.clear()
+        count = scout.get_monthly_listeners("test_artist_id_123")
+        self.assertEqual(count, 121100)
+
 if __name__ == '__main__':
     unittest.main()
