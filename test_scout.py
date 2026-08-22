@@ -356,5 +356,65 @@ class TestScoutV2(unittest.TestCase):
         count = scout.get_monthly_listeners("test_artist_id_123")
         self.assertEqual(count, 121100)
 
+    @patch('scout.supabase')
+    def test_select_weekly_playlist_tracks_relaxation(self, mock_supabase):
+        # Test that when candidate pool has >= 10 candidates and strict 10-week check excludes too many,
+        # the relaxation ladder lowers exclusion criteria to select 10 tracks.
+        mock_table = MagicMock()
+        mock_execute = MagicMock()
+
+        today_week_num = datetime.now().isocalendar()[1]
+        last_week_str = f"W{today_week_num - 2}"
+
+        # All 12 bands were used 2 weeks ago (excluded by 10-week rule)
+        mock_execute.data = [
+            {"band_name": f"Band {i}", "last_used_in_playlist": last_week_str, "ever_featured_in_top50": False}
+            for i in range(1, 13)
+        ]
+        mock_supabase.table.return_value = mock_table
+        mock_table.select.return_value = mock_execute
+        mock_execute.execute.return_value = mock_execute
+
+        candidates = [
+            {
+                "track_id": f"t{i}",
+                "track_name": f"Song {i}",
+                "artist_id": f"a{i}",
+                "artist_name": f"Band {i}",
+                "monthly_listeners": 5000,
+                "release_date": (datetime.now().date()).isoformat()
+            }
+            for i in range(1, 13)
+        ]
+
+        selected = scout.select_weekly_playlist_tracks(candidates, current_week=f"W{today_week_num}")
+        self.assertEqual(len(selected), 10)
+
+    @patch('scout.get_monthly_listeners', return_value=5000)
+    @patch('scout.requests.get')
+    def test_discover_punk_candidates_search(self, mock_get, mock_listeners):
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        today_str = datetime.now().date().isoformat()
+        mock_res.json.return_value = {
+            "tracks": {
+                "items": [
+                    {
+                        "id": "tr_101",
+                        "name": "Punk Anthem",
+                        "album": {"name": "Punk Album", "release_date": today_str},
+                        "artists": [{"id": "art_101", "name": "The Distillers"}]
+                    }
+                ]
+            },
+            "albums": {"items": []}
+        }
+        mock_get.return_value = mock_res
+
+        candidates = scout.discover_punk_candidates("mock_token")
+        self.assertTrue(len(candidates) >= 1)
+        self.assertEqual(candidates[0]["track_id"], "tr_101")
+        self.assertEqual(candidates[0]["artist_name"], "The Distillers")
+
 if __name__ == '__main__':
     unittest.main()
