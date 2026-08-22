@@ -11,6 +11,7 @@ import argparse
 import sys
 import re
 import base64
+import urllib.parse
 
 load_dotenv()
 
@@ -48,9 +49,11 @@ BOT_USER_AGENTS = [
 
 RATE_LIMIT_DELAY = 0.5
 
-# Circuit breaker flags to prevent hammering when blocked
+# Circuit breaker flags and failure counters to prevent hammering when blocked
 LASTFM_BLOCKED = False
 DDG_BLOCKED = False
+_DOMAIN_FAILURES = {"last.fm": 0, "duckduckgo.com": 0}
+_MAX_CONSECUTIVE_FAILURES = 3
 
 # Spotify Auth Cache
 _spotify_token_cache = {"token": None, "expires_at": 0}
@@ -818,7 +821,7 @@ def ingest_playlist_all(playlist_url_or_id):
         print(f"[No DB] Would insert new artists: {[a['name'] for a in new_artists_to_insert]}")
 
 def robust_request(method, url, max_retries=3, initial_delay=2.0, **kwargs):
-    global LASTFM_BLOCKED, DDG_BLOCKED
+    global LASTFM_BLOCKED, DDG_BLOCKED, _DOMAIN_FAILURES
 
     # Check circuit breakers before even starting the request
     if "last.fm" in url and LASTFM_BLOCKED:
@@ -837,6 +840,8 @@ def robust_request(method, url, max_retries=3, initial_delay=2.0, **kwargs):
     if "User-Agent" not in kwargs["headers"]:
         kwargs["headers"]["User-Agent"] = random.choice(USER_AGENTS)
 
+    domain_key = "last.fm" if "last.fm" in url else ("duckduckgo.com" if "duckduckgo.com" in url else None)
+
     delay = initial_delay
     for attempt in range(max_retries):
         try:
@@ -848,25 +853,34 @@ def robust_request(method, url, max_retries=3, initial_delay=2.0, **kwargs):
                 res = requests.get(url, **kwargs)
 
             if 200 <= res.status_code < 300:
+                if domain_key:
+                    _DOMAIN_FAILURES[domain_key] = 0
                 return res
             elif res.status_code in [403, 406, 429]:
-                print(f"Warning: Got status code {res.status_code} for {url}. Blocking further requests to this domain.")
-                if "last.fm" in url:
-                    LASTFM_BLOCKED = True
-                if "duckduckgo.com" in url:
-                    DDG_BLOCKED = True
+                print(f"Warning: Got status code {res.status_code} for {url}.")
+                if domain_key:
+                    _DOMAIN_FAILURES[domain_key] += 1
+                    if _DOMAIN_FAILURES[domain_key] >= _MAX_CONSECUTIVE_FAILURES:
+                        print(f"Reached {_MAX_CONSECUTIVE_FAILURES} consecutive blocking responses for {domain_key}. Activating circuit breaker.")
+                        if domain_key == "last.fm":
+                            LASTFM_BLOCKED = True
+                        elif domain_key == "duckduckgo.com":
+                            DDG_BLOCKED = True
                 return None
             else:
                 res.raise_for_status()
         except Exception as e:
             print(f"Request attempt {attempt + 1} failed for {url}: {e}")
             if attempt == max_retries - 1:
-                # Trigger circuit breaker if we reach the last retry attempt on connection issues
-                print(f"Max retries exceeded for {url}. Activating circuit breaker.")
-                if "last.fm" in url:
-                    LASTFM_BLOCKED = True
-                if "duckduckgo.com" in url:
-                    DDG_BLOCKED = True
+                print(f"Max retries exceeded for {url}.")
+                if domain_key:
+                    _DOMAIN_FAILURES[domain_key] += 1
+                    if _DOMAIN_FAILURES[domain_key] >= _MAX_CONSECUTIVE_FAILURES:
+                        print(f"Reached {_MAX_CONSECUTIVE_FAILURES} consecutive failure errors for {domain_key}. Activating circuit breaker.")
+                        if domain_key == "last.fm":
+                            LASTFM_BLOCKED = True
+                        elif domain_key == "duckduckgo.com":
+                            DDG_BLOCKED = True
             delay *= 2
 
     return None
@@ -999,7 +1013,7 @@ def enrich_artists_instagram():
         print(f"Error enriching artists with Instagram: {e}")
 
 def scrape_lastfm_artist_events(artist_name):
-    safe_artist = artist_name.replace(" ", "+")
+    safe_artist = urllib.parse.quote(artist_name, safe='')
     url = f"https://www.last.fm/music/{safe_artist}/+events"
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
