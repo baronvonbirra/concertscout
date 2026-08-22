@@ -416,5 +416,55 @@ class TestScoutV2(unittest.TestCase):
         self.assertEqual(candidates[0]["track_id"], "tr_101")
         self.assertEqual(candidates[0]["artist_name"], "The Distillers")
 
+    @patch('scout.supabase')
+    @patch('scout.requests.post')
+    @patch('scout.requests.get')
+    @patch('scout.discover_punk_candidates')
+    @patch('scout.get_spotify_write_token')
+    def test_generate_monday_playlist_progressive_window_expansion(self, mock_write_token, mock_discover, mock_get, mock_post, mock_supabase):
+        mock_write_token.return_value = "mock_write_token"
+
+        # Mock playlist tracks GET
+        mock_get_res = MagicMock()
+        mock_get_res.status_code = 200
+        mock_get_res.json.return_value = {"items": []}
+        mock_get.return_value = mock_get_res
+
+        # Mock post for adding tracks
+        mock_post_res = MagicMock()
+        mock_post_res.status_code = 201
+        mock_post.return_value = mock_post_res
+
+        # Mock band registry DB call
+        mock_table = MagicMock()
+        mock_supabase.table.return_value = mock_table
+        mock_table.select.return_value.execute.return_value = MagicMock(data=[])
+
+        today_str = datetime.now().date().isoformat()
+
+        # Window 7 days returns 3 tracks, window 14 returns 10 tracks
+        candidates_7d = [
+            {"track_id": f"t{i}", "track_name": f"Song {i}", "artist_id": f"a{i}", "artist_name": f"Band {i}", "monthly_listeners": 5000, "release_date": today_str, "tier": "Indie"}
+            for i in range(1, 4)
+        ]
+        candidates_14d = [
+            {"track_id": f"t{i}", "track_name": f"Song {i}", "artist_id": f"a{i}", "artist_name": f"Band {i}", "monthly_listeners": 5000, "release_date": today_str, "tier": "Indie"}
+            for i in range(1, 11)
+        ]
+
+        def discover_side_effect(token, window_days=7, existing_candidates=None):
+            if window_days == 7:
+                return candidates_7d
+            return candidates_14d
+
+        mock_discover.side_effect = discover_side_effect
+
+        scout.generate_monday_playlist()
+
+        # Check discover_punk_candidates was called twice (for 7 days then 14 days)
+        self.assertEqual(mock_discover.call_count, 2)
+        mock_discover.assert_any_call("mock_write_token", window_days=7, existing_candidates=[])
+        mock_discover.assert_any_call("mock_write_token", window_days=14, existing_candidates=candidates_7d)
+
 if __name__ == '__main__':
     unittest.main()
