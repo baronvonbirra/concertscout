@@ -11,6 +11,35 @@ Automated tracking of live music tours in Spain and Portugal for a curated artis
 - **Neo-Brutalist Punk Aesthetic UI**: A high-contrast, DIY-aesthetic dashboard built with Alpine.js and Streamlit.
 - **Deployments**: Static deployment to GitHub Pages using `@stlite/browser` (pinned to 1.4.0) with WebAssembly execution.
 
+## 📅 Scheduled Cron Jobs (GitHub Actions)
+
+All backend automation workflows are verified and configured as automated GitHub Actions cron jobs:
+
+1. **Monday Playlist Curation (`scout_monday_playlist.yml`)**
+   - **Cron Schedule**: `0 7 * * 1` (Mondays at 07:00 UTC)
+   - **Command**: `python scout.py --monday-playlist`
+   - **Description**: Selects exactly 10 fresh tracks meeting strict tier distribution & frequency cap rules for 'Punk in Progress', prunes tracks older than 84 days, and syncs discovered acts to the Tour Tracker DB.
+
+2. **Wednesday Weekly Ingestion & Tour Scouting (`scout_cron.yml`)**
+   - **Cron Schedule**: `0 7 * * 3` (Wednesdays at 07:00 UTC)
+   - **Command**: `python scout.py --weekly`
+   - **Description**: Parses Weekly Punk playlist positions 2–7, resolves Instagram profiles, and scrapes Last.fm for upcoming tour dates in Spain and Portugal.
+
+3. **Sunday Band Analytics Snapshot (`scout_sunday_analytics.yml`)**
+   - **Cron Schedule**: `0 22 * * 0` (Sundays at 22:00 UTC)
+   - **Command**: `python scout.py --analytics`
+   - **Description**: Captures weekly listener/follower snapshots across tracked bands, calculates WoW/MoM growth percentages, updates momentum scores (0–100), and re-evaluates growth trajectories.
+
+4. **On-Demand Playlist Ingestion (`scout_manual.yml`)**
+   - **Trigger**: `workflow_dispatch` (Manual)
+   - **Command**: `python scout.py --playlist "<url>"`
+   - **Description**: Ingests custom Spotify playlist URLs on-demand into the artist registry.
+
+5. **Static Site Deployment (`deploy.yml`)**
+   - **Trigger**: `push` to `main` branch / `workflow_dispatch`
+   - **Command**: `python generate_static.py`
+   - **Description**: Regenerates the WebAssembly stlite static bundle and deploys to GitHub Pages.
+
 ## 🛠 Technical Architecture
 
 - **Backend**: Python 3.10+

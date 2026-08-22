@@ -574,6 +574,7 @@ def main():
             adminError: '',
             adminSubmitting: false,
             adminSuccess: false,
+            adminTab: 'submissions',
             subWeek: 'W33',
             subBandName: '',
             subDirectViews: 0,
@@ -990,8 +991,6 @@ def main():
                     <div class="flex flex-wrap border-4 border-white overflow-hidden w-full md:w-7/12">
                         <button @click="viewMode = 'tours'" :class="viewMode === 'tours' ? 'bg-[#CCFF00] text-black' : 'text-white'"
                                 class="flex-1 px-2 md:px-3 py-3 bebas text-base md:text-xl transition-all">🎸 TOURS</button>
-                        <button @click="viewMode = 'analytics'" :class="viewMode === 'analytics' ? 'bg-[#00E5FF] text-black' : 'text-white'"
-                                class="flex-1 px-2 md:px-3 py-3 bebas text-base md:text-xl transition-all border-l-2 md:border-l-4 border-white">📊 ANALYTICS</button>
                         <button @click="viewMode = 'playlist'" :class="viewMode === 'playlist' ? 'bg-[#FFCC00] text-black' : 'text-white'"
                                 class="flex-1 px-2 md:px-3 py-3 bebas text-base md:text-xl transition-all border-l-2 md:border-l-4 border-white">PUNK IN PROGRESS</button>
                         <button @click="viewMode = 'admin'" :class="viewMode === 'admin' ? 'bg-[#FF5733] text-black' : 'text-white'"
@@ -1007,7 +1006,7 @@ def main():
                 </div>
 
                 <!-- City Pills -->
-                <div class="flex flex-wrap gap-2" x-show="viewMode !== 'scan' && viewMode !== 'playlist'">
+                <div class="flex flex-wrap gap-2" x-show="viewMode === 'tours'">
                     <template x-for="c in cities" :key="c">
                         <div @click="city = c" :class="city === c ? 'active' : ''"
                              class="pill mono text-sm uppercase" x-text="c"></div>
@@ -1045,371 +1044,6 @@ def main():
                 <!-- Empty State for Tours -->
                 <div x-show="tourEvents.length === 0" class="text-center py-20">
                     <p class="bebas text-4xl opacity-50">NO UPCOMING TOURS IN SPAIN / PORTUGAL. STAY REBELLIOUS.</p>
-                </div>
-            </div>
-
-            <!-- Analytics Dashboard Section -->
-            <div x-show="viewMode === 'analytics'" x-cloak class="space-y-8">
-                <!-- Sub-Navigation for Analytics -->
-                <div class="flex border-4 border-white overflow-hidden">
-                    <button @click="analyticsSubTab = 'overview'" :class="analyticsSubTab === 'overview' ? 'bg-[#00E5FF] text-black font-bold' : 'bg-black text-white'" class="flex-1 py-3 bebas text-2xl transition-all">📊 OVERVIEW & BAND TRACKER</button>
-                    <button @click="analyticsSubTab = 'shares'" :class="analyticsSubTab === 'shares' ? 'bg-[#FF5733] text-black font-bold' : 'bg-black text-white'" class="flex-1 py-3 bebas text-2xl transition-all border-l-4 border-white">🚀 SHARE IMPACT DASHBOARD</button>
-                </div>
-
-                <!-- OVERVIEW SUB-TAB -->
-                <div x-show="analyticsSubTab === 'overview'" class="space-y-8">
-                    <!-- Section 1: Overview Cards -->
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                        <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                            <p class="mono text-xs text-gray-500 uppercase font-bold">Bands Tracked</p>
-                            <h3 class="bebas text-5xl mt-2" x-text="totalBandsTracked"></h3>
-                            <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Historical Snapshot Audit</p>
-                        </div>
-                        <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                            <p class="mono text-xs text-gray-500 uppercase font-bold">Total Listeners</p>
-                            <h3 class="bebas text-5xl mt-2 acid-lime" x-text="totalListeners"></h3>
-                            <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Combined Spotify Audience</p>
-                        </div>
-                        <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                            <p class="mono text-xs text-gray-500 uppercase font-bold">Avg WoW Growth</p>
-                            <h3 class="bebas text-5xl mt-2" :class="avgWowGrowth.startsWith('+') ? 'text-green-600' : 'text-red-600'" x-text="avgWowGrowth"></h3>
-                            <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Weekly Portfolio Velocity</p>
-                        </div>
-                        <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                            <p class="mono text-xs text-gray-500 uppercase font-bold">Most Explosive Act</p>
-                            <h3 class="bebas text-4xl mt-2 truncate text-purple-700" x-text="mostExplosiveBand"></h3>
-                            <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Top Weekly Velocity</p>
-                        </div>
-                    </div>
-
-                    <!-- Filters & Controls -->
-                    <div class="flex flex-wrap items-center justify-between gap-4 bg-gray-900 p-4 border-4 border-white">
-                        <div class="flex flex-wrap gap-2">
-                            <button @click="analyticsFilter = 'all'" :class="analyticsFilter === 'all' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">ALL BANDS</button>
-                            <button @click="analyticsFilter = 'explosive'" :class="analyticsFilter === 'explosive' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">🚀 EXPLOSIVE ONLY</button>
-                            <button @click="analyticsFilter = 'featured'" :class="analyticsFilter === 'featured' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">🔥 FEATURED BY US</button>
-                            <button @click="analyticsFilter = 'shared'" :class="analyticsFilter === 'shared' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">📲 SHARED BANDS</button>
-                            <button @click="analyticsFilter = 'under100k'" :class="analyticsFilter === 'under100k' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">💎 HIDDEN GEMS (&lt;100K)</button>
-                        </div>
-
-                    <div class="flex items-center gap-2 mono text-xs">
-                        <span class="text-gray-400 uppercase font-bold">SORT BY:</span>
-                        <select x-model="analyticsSortKey" class="bg-black text-white p-2 border border-white focus:outline-none uppercase font-bold">
-                            <option value="momentum_score">Momentum Score</option>
-                            <option value="latest_listener_count">Listeners</option>
-                            <option value="week_over_week_growth_pct">WoW Growth %</option>
-                            <option value="month_over_month_growth_pct">MoM Growth %</option>
-                            <option value="band_name">Band Name</option>
-                        </select>
-                        <button @click="analyticsSortAsc = !analyticsSortAsc" class="bg-white text-black p-2 font-bold border border-white" x-text="analyticsSortAsc ? '▲' : '▼'"></button>
-                    </div>
-                </div>
-
-                <!-- Section 2: Sortable Band Table -->
-                <div class="brutal-card p-6 bg-white text-black overflow-x-auto">
-                    <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
-                        <span>BAND GROWTH TRACKER</span>
-                        <span class="mono text-xs font-normal text-gray-500" x-text="'Showing ' + filteredAnalytics.length + ' bands'"></span>
-                    </h3>
-
-                    <table class="w-full text-left border-collapse mono text-xs">
-                        <thead>
-                            <tr class="bg-black text-white uppercase">
-                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800" @click="analyticsSortKey = 'band_name'; analyticsSortAsc = !analyticsSortAsc">BAND NAME</th>
-                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-right" @click="analyticsSortKey = 'latest_listener_count'; analyticsSortAsc = !analyticsSortAsc">LISTENERS</th>
-                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-right" @click="analyticsSortKey = 'week_over_week_growth_pct'; analyticsSortAsc = !analyticsSortAsc">WoW %</th>
-                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-right" @click="analyticsSortKey = 'month_over_month_growth_pct'; analyticsSortAsc = !analyticsSortAsc">MoM %</th>
-                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-center" @click="analyticsSortKey = 'momentum_score'; analyticsSortAsc = !analyticsSortAsc">MOMENTUM</th>
-                                <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-center" @click="analyticsSortKey = 'growth_trajectory'; analyticsSortAsc = !analyticsSortAsc">TRAJECTORY</th>
-                                <th class="p-3 border border-black text-center">ACTION</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <template x-for="band in filteredAnalytics" :key="band.id || band.band_name">
-                                <tr class="hover:bg-yellow-100 transition-colors cursor-pointer" @click="openBandModal(band)">
-                                    <td class="p-3 border border-black font-bold text-sm">
-                                        <div class="flex items-center gap-2">
-                                            <span x-text="band.band_name"></span>
-                                            <template x-if="band.total_features > 0">
-                                                <span class="bg-black text-yellow-300 text-[9px] px-1.5 py-0.5 font-bold uppercase">FEATURED</span>
-                                            </template>
-                                        </div>
-                                    </td>
-                                    <td class="p-3 border border-black text-right font-bold text-sm" x-text="(band.latest_listener_count || 0).toLocaleString()"></td>
-                                    <td class="p-3 border border-black text-right font-bold" :class="(band.week_over_week_growth_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((band.week_over_week_growth_pct || 0) >= 0 ? '+' : '') + (band.week_over_week_growth_pct || 0) + '%'"></td>
-                                    <td class="p-3 border border-black text-right font-bold" :class="(band.month_over_month_growth_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((band.month_over_month_growth_pct || 0) >= 0 ? '+' : '') + (band.month_over_month_growth_pct || 0) + '%'"></td>
-                                    <td class="p-3 border border-black text-center">
-                                        <div class="inline-block bg-black text-[#CCFF00] font-bold px-2.5 py-1 text-xs border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-                                            🔥 <span x-text="band.momentum_score || 0"></span>/100
-                                        </div>
-                                    </td>
-                                    <td class="p-3 border border-black text-center font-bold">
-                                        <span x-show="band.growth_trajectory === 'explosive'" class="bg-purple-200 text-purple-900 border border-purple-800 px-2 py-0.5 text-[10px] uppercase">📈 EXPLOSIVE</span>
-                                        <span x-show="band.growth_trajectory === 'steady'" class="bg-green-200 text-green-900 border border-green-800 px-2 py-0.5 text-[10px] uppercase">📊 STEADY</span>
-                                        <span x-show="band.growth_trajectory === 'flat'" class="bg-yellow-200 text-yellow-900 border border-yellow-800 px-2 py-0.5 text-[10px] uppercase">▬ FLAT</span>
-                                        <span x-show="band.growth_trajectory === 'declining'" class="bg-red-200 text-red-900 border border-red-800 px-2 py-0.5 text-[10px] uppercase">📉 DECLINING</span>
-                                    </td>
-                                    <td class="p-3 border border-black text-center" @click.stop>
-                                        <button @click="openBandModal(band)" class="bg-black text-white hover:bg-[#CCFF00] hover:text-black px-3 py-1 font-bold text-xs uppercase border border-black transition-colors">
-                                            INSPECT
-                                        </button>
-                                    </td>
-                                </tr>
-                            </template>
-
-                            <template x-if="filteredAnalytics.length === 0">
-                                <tr>
-                                    <td colspan="7" class="p-8 text-center text-gray-500 font-bold uppercase">NO ANALYTICS SNAPSHOTS RECORDED YET. RUN SUNDAY SNAPSHOT JOB.</td>
-                                </tr>
-                            </template>
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- Section 3: Visual Trends -->
-                <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                    <!-- Bar Chart: Top Momentum Bands -->
-                    <div class="lg:col-span-7 brutal-card p-6 bg-white text-black">
-                        <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase">🔥 TOP MOMENTUM BANDS THIS MONTH</h3>
-                        <div class="space-y-3">
-                            <template x-for="band in [...analyticsSummary].sort((a,b) => (b.momentum_score||0) - (a.momentum_score||0)).slice(0, 5)" :key="band.band_name">
-                                <div>
-                                    <div class="flex justify-between text-xs mono font-bold uppercase mb-1">
-                                        <span x-text="band.band_name"></span>
-                                        <span x-text="(band.momentum_score || 0) + ' / 100'"></span>
-                                    </div>
-                                    <div class="w-full bg-gray-200 h-6 border-2 border-black relative overflow-hidden">
-                                        <div class="bg-[#CCFF00] h-full transition-all duration-500 border-r-2 border-black" :style="'width: ' + Math.max(5, band.momentum_score || 0) + '%'"></div>
-                                    </div>
-                                </div>
-                            </template>
-                            <template x-if="analyticsSummary.length === 0">
-                                <p class="mono text-xs text-gray-500 uppercase">NO MOMENTUM DATA AVAILABLE YET.</p>
-                            </template>
-                        </div>
-                    </div>
-
-                    <!-- Trajectory Breakdown Card -->
-                    <div class="lg:col-span-5 brutal-card p-6 bg-white text-black flex flex-col justify-between">
-                        <div>
-                            <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase">📈 TRAJECTORY DISTRIBUTION</h3>
-                            <div class="space-y-4 mono text-xs">
-                                <div class="flex justify-between items-center p-3 bg-purple-100 border-2 border-black">
-                                    <span class="font-bold text-purple-900 uppercase">📈 EXPLOSIVE</span>
-                                    <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'explosive').length"></span>
-                                </div>
-                                <div class="flex justify-between items-center p-3 bg-green-100 border-2 border-black">
-                                    <span class="font-bold text-green-900 uppercase">📊 STEADY</span>
-                                    <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'steady').length"></span>
-                                </div>
-                                <div class="flex justify-between items-center p-3 bg-yellow-100 border-2 border-black">
-                                    <span class="font-bold text-yellow-900 uppercase">▬ FLAT</span>
-                                    <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'flat').length"></span>
-                                </div>
-                                <div class="flex justify-between items-center p-3 bg-red-100 border-2 border-black">
-                                    <span class="font-bold text-red-900 uppercase">📉 DECLINING</span>
-                                    <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'declining').length"></span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                </div>
-
-                <!-- SHARE IMPACT DASHBOARD SUB-TAB -->
-                <div x-show="analyticsSubTab === 'shares'" class="space-y-8">
-                    <!-- Share Impact Summary Stats -->
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                        <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                            <p class="mono text-xs text-gray-500 uppercase font-bold">Total Bands Shared</p>
-                            <h3 class="bebas text-5xl mt-2 text-orange-600" x-text="totalBandsShared"></h3>
-                            <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Promoted on Socials</p>
-                        </div>
-                        <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                            <p class="mono text-xs text-gray-500 uppercase font-bold">Avg Shares per Band</p>
-                            <h3 class="bebas text-5xl mt-2" x-text="avgSharesPerBand"></h3>
-                            <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Frequency Ratio</p>
-                        </div>
-                        <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                            <p class="mono text-xs text-gray-500 uppercase font-bold">Most Shared Band</p>
-                            <h3 class="bebas text-4xl mt-2 truncate text-purple-700" x-text="mostSharedBand"></h3>
-                            <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Top Shared Artist</p>
-                        </div>
-                        <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                            <p class="mono text-xs text-gray-500 uppercase font-bold">High ROI Shares (&gt;10% Lift)</p>
-                            <h3 class="bebas text-5xl mt-2 acid-lime" x-text="highImpactSharesCount"></h3>
-                            <p class="mono text-[10px] text-gray-400 mt-1 uppercase">High Impact Conversions</p>
-                        </div>
-                    </div>
-
-                    <!-- Shared Bands Report Table -->
-                    <div class="brutal-card p-6 bg-white text-black overflow-x-auto">
-                        <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
-                            <span>📲 SHARED BANDS PERFORMANCE REPORT</span>
-                            <span class="mono text-xs font-normal text-gray-500" x-text="sharedBandsList.length + ' Bands Shared'"></span>
-                        </h3>
-
-                        <table class="w-full text-left border-collapse mono text-xs">
-                            <thead>
-                                <tr class="bg-black text-white uppercase">
-                                    <th class="p-3 border border-black">BAND NAME</th>
-                                    <th class="p-3 border border-black text-center">TIMES SHARED</th>
-                                    <th class="p-3 border border-black text-center">LAST SHARED WEEK</th>
-                                    <th class="p-3 border border-black text-center">MOMENTUM</th>
-                                    <th class="p-3 border border-black text-right">AVG LIFT AFTER SHARE %</th>
-                                    <th class="p-3 border border-black text-right">LATEST SHARE LIFT</th>
-                                    <th class="p-3 border border-black text-center">ACTION</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <template x-for="band in sharedBandsList" :key="band.id || band.band_name">
-                                    <tr class="hover:bg-orange-50 transition-colors cursor-pointer" @click="openBandModal(band)">
-                                        <td class="p-3 border border-black font-bold text-sm" x-text="band.band_name"></td>
-                                        <td class="p-3 border border-black text-center font-bold" x-text="band.total_shares"></td>
-                                        <td class="p-3 border border-black text-center" x-text="band.last_shared_week || 'N/A'"></td>
-                                        <td class="p-3 border border-black text-center">
-                                            <div class="inline-block bg-black text-[#CCFF00] font-bold px-2 py-0.5 text-xs">
-                                                🔥 <span x-text="band.momentum_score || 0"></span>
-                                            </div>
-                                        </td>
-                                        <td class="p-3 border border-black text-right font-bold" :class="(band.avg_growth_after_share_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((band.avg_growth_after_share_pct || 0) >= 0 ? '+' : '') + (band.avg_growth_after_share_pct || 0) + '%'"></td>
-                                        <td class="p-3 border border-black text-right font-bold" :class="(band.share_lift_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((band.share_lift_pct || 0) >= 0 ? '+' : '') + (band.share_lift_pct || 0) + '% (' + (band.share_lift_absolute >= 0 ? '+' : '') + (band.share_lift_absolute || 0) + ')'"></td>
-                                        <td class="p-3 border border-black text-center" @click.stop>
-                                            <button @click="openBandModal(band)" class="bg-black text-white hover:bg-[#CCFF00] hover:text-black px-3 py-1 font-bold text-xs uppercase border border-black">
-                                                INSPECT
-                                            </button>
-                                        </td>
-                                    </tr>
-                                </template>
-                                <template x-if="sharedBandsList.length === 0">
-                                    <tr>
-                                        <td colspan="7" class="p-8 text-center text-gray-500 font-bold uppercase">NO BANDS SHARED YET. RECORD SHARED INTERACTIONS IN ADMIN TAB.</td>
-                                    </tr>
-                                </template>
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <!-- Master Share Decision Matrix Widget (The 5 Tiers) -->
-                    <div class="brutal-card p-6 bg-white text-black">
-                        <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
-                            <span>🎯 MASTER SHARE DECISION MATRIX (5 TIERS)</span>
-                            <span class="mono text-xs text-gray-500 font-normal">Analytics & Historical Curation Rules</span>
-                        </h3>
-
-                        <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
-                            <div class="p-3 bg-green-100 border-2 border-black mono">
-                                <p class="text-[10px] text-green-900 font-bold uppercase">TIER 1: DEFINITE YES 🚀</p>
-                                <p class="bebas text-xl mt-1 text-green-950">Proven engagement</p>
-                                <p class="text-[9px] text-gray-600 mt-1">Shared before & Avg Score &ge; 1.8</p>
-                            </div>
-                            <div class="p-3 bg-lime-100 border-2 border-black mono">
-                                <p class="text-[10px] text-lime-900 font-bold uppercase">TIER 2: LIKELY YES ✅</p>
-                                <p class="bebas text-xl mt-1 text-lime-950">Track record</p>
-                                <p class="text-[9px] text-gray-600 mt-1">Shared before & Saves &gt; 80</p>
-                            </div>
-                            <div class="p-3 bg-amber-100 border-2 border-black mono">
-                                <p class="text-[10px] text-amber-900 font-bold uppercase">TIER 3: MAYBE ⚡</p>
-                                <p class="bebas text-xl mt-1 text-amber-950">Unproven but hot</p>
-                                <p class="text-[9px] text-gray-600 mt-1">Never shared & Saves &gt; 100</p>
-                            </div>
-                            <div class="p-3 bg-blue-100 border-2 border-black mono">
-                                <p class="text-[10px] text-blue-900 font-bold uppercase">TIER 4: LET IT COOK 💭</p>
-                                <p class="bebas text-xl mt-1 text-blue-950">Building momentum</p>
-                                <p class="text-[9px] text-gray-600 mt-1">Never shared & Featured &ge; 2x</p>
-                            </div>
-                            <div class="p-3 bg-red-100 border-2 border-black mono">
-                                <p class="text-[10px] text-red-900 font-bold uppercase">TIER 5: SKIP ❌</p>
-                                <p class="bebas text-xl mt-1 text-red-950">Low track record</p>
-                                <p class="text-[9px] text-gray-600 mt-1">Featured multiple times, low response</p>
-                            </div>
-                        </div>
-
-                        <!-- Band Evaluator Quick Search in Matrix -->
-                        <div x-data="{ evalBand: 'Ellen May' }" class="p-4 bg-gray-900 text-white border-2 border-black">
-                            <label class="block mono text-xs font-bold uppercase mb-2 text-[#CCFF00]">EVALUATE ANY BAND AGAINST FRAMEWORK:</label>
-                            <div class="flex flex-col sm:flex-row gap-3">
-                                <input type="text" x-model="evalBand" placeholder="Type band name (e.g. RATSALAD)..." class="flex-1 bg-black text-white p-2 border border-white mono text-sm">
-                            </div>
-
-                            <div class="mt-4 p-3 bg-white text-black border-2 border-black flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                                <div>
-                                    <h4 class="bebas text-3xl leading-none" x-text="evalBand || 'Band Name'"></h4>
-                                    <p class="mono text-xs text-gray-600 mt-1 uppercase">
-                                        Featured: <strong x-text="getBandShareDecision(evalBand).appearances + 'x'"></strong> &middot;
-                                        Shared: <strong x-text="getBandShareDecision(evalBand).times_shared + 'x'"></strong> &middot;
-                                        Success Rate: <strong x-text="getBandShareDecision(evalBand).success_rate_pct + '%'"></strong> &middot;
-                                        Saves: <strong x-text="getBandShareDecision(evalBand).total_saves"></strong> &middot;
-                                        Avg Score: <strong x-text="getBandShareDecision(evalBand).avg_interaction"></strong>
-                                    </p>
-                                </div>
-                                <span :class="getBandShareDecision(evalBand).badge_bg + ' ' + getBandShareDecision(evalBand).badge_text"
-                                      class="px-4 py-2 font-bold border-2 border-black bebas text-xl uppercase tracking-wide"
-                                      x-text="getBandShareDecision(evalBand).recommendation"></span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Grid: Recommendations & High ROI Shares -->
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        <!-- Next Share Recommendations Widget -->
-                        <div class="brutal-card p-6 bg-white text-black">
-                            <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
-                                <span>🚀 NEXT SHARE CANDIDATES</span>
-                                <span class="mono text-xs text-gray-500 font-normal">Momentum &gt; 70 &bull; Not Shared</span>
-                            </h3>
-                            <div class="space-y-3">
-                                <template x-for="candidate in shareCandidates" :key="candidate.id || candidate.band_name">
-                                    <div class="p-3 border-2 border-black bg-yellow-50 flex items-center justify-between shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-                                        <div>
-                                            <h4 class="bebas text-2xl leading-none" x-text="candidate.band_name"></h4>
-                                            <p class="mono text-[10px] text-gray-600 mt-1 uppercase">
-                                                Listeners: <strong x-text="(candidate.latest_listener_count || 0).toLocaleString()"></strong> &middot;
-                                                WoW: <strong :class="(candidate.week_over_week_growth_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((candidate.week_over_week_growth_pct || 0) >= 0 ? '+' : '') + candidate.week_over_week_growth_pct + '%'"></strong>
-                                            </p>
-                                        </div>
-                                        <div class="flex items-center gap-3">
-                                            <span class="bg-black text-[#CCFF00] font-bold px-2 py-1 mono text-xs">🔥 <span x-text="candidate.momentum_score"></span>/100</span>
-                                            <button @click="openBandModal(candidate)" class="bg-[#CCFF00] text-black hover:bg-black hover:text-white px-3 py-1 bebas text-lg border border-black transition-colors uppercase">
-                                                RECOMMEND
-                                            </button>
-                                        </div>
-                                    </div>
-                                </template>
-                                <template x-if="shareCandidates.length === 0">
-                                    <p class="mono text-xs text-gray-500 uppercase font-bold p-4 text-center">NO UNSHARED CANDIDATES WITH MOMENTUM &gt; 70 CURRENTLY.</p>
-                                </template>
-                            </div>
-                        </div>
-
-                        <!-- High ROI Shares Report -->
-                        <div class="brutal-card p-6 bg-white text-black">
-                            <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
-                                <span>🔥 HIGH ROI SHARES REPORT</span>
-                                <span class="mono text-xs text-gray-500 font-normal">&gt;10% Lift After Share</span>
-                            </h3>
-                            <div class="space-y-3">
-                                <template x-for="roi in highRoiSharesList" :key="roi.id || roi.band_name">
-                                    <div class="p-3 border-2 border-black bg-green-50 flex items-center justify-between shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-                                        <div>
-                                            <h4 class="bebas text-2xl leading-none" x-text="roi.band_name"></h4>
-                                            <p class="mono text-[10px] text-gray-600 mt-1 uppercase">
-                                                Shared: <strong x-text="roi.total_shares + 'x'"></strong> &middot;
-                                                Last: <strong x-text="roi.last_shared_week"></strong> &middot;
-                                                Listeners: <strong x-text="(roi.latest_listener_count || 0).toLocaleString()"></strong>
-                                            </p>
-                                        </div>
-                                        <div class="text-right">
-                                            <span class="bebas text-2xl text-green-700 block" x-text="'+' + roi.avg_growth_after_share_pct + '% LIFT'"></span>
-                                        </div>
-                                    </div>
-                                </template>
-                                <template x-if="highRoiSharesList.length === 0">
-                                    <p class="mono text-xs text-gray-500 uppercase font-bold p-4 text-center">NO HIGH-ROI SHARES (&gt;10% LIFT) RECORDED YET.</p>
-                                </template>
-                            </div>
-                        </div>
-                    </div>
                 </div>
             </div>
 
@@ -1526,7 +1160,7 @@ def main():
                 <div class="mb-8 bg-[#FF5733] border-4 border-black p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-black">
                     <h2 class="bebas text-4xl mb-2 tracking-wide uppercase">⚡ DIY PUNK ADMIN DASHBOARD ⚡</h2>
                     <p class="mono text-sm leading-relaxed">
-                        Submit weekly band performance data. Pre-calculated interaction scores & derive derived flags with zero human error.
+                        Submit weekly band performance data & monitor real-time portfolio band growth analytics & share recommendations.
                     </p>
                 </div>
 
@@ -1542,13 +1176,21 @@ def main():
                     <p x-show="adminError" class="text-red-600 font-bold mono text-sm mt-3" x-text="adminError"></p>
                 </div>
 
-                <!-- Authenticated Admin Forms -->
+                <!-- Authenticated Admin Section -->
                 <div x-show="adminAuth" class="space-y-8">
-                    <!-- Toggle Single vs Bulk -->
-                    <div class="flex gap-4">
-                        <button @click="bulkMode = false" :class="!bulkMode ? 'bg-[#CCFF00] text-black' : 'bg-black text-white'" class="px-6 py-2 bebas text-2xl border-4 border-black">SINGLE SUBMISSION</button>
-                        <button @click="bulkMode = true" :class="bulkMode ? 'bg-[#CCFF00] text-black' : 'bg-black text-white'" class="px-6 py-2 bebas text-2xl border-4 border-black">BULK CSV IMPORT</button>
+                    <!-- Sub-Navigation for Admin: Submissions vs Analytics -->
+                    <div class="flex border-4 border-white overflow-hidden bg-black mb-8">
+                        <button @click="adminTab = 'submissions'" :class="adminTab === 'submissions' ? 'bg-[#CCFF00] text-black font-bold' : 'bg-black text-white'" class="flex-1 py-3 bebas text-2xl transition-all">⚡ SUBMISSIONS & LOGS</button>
+                        <button @click="adminTab = 'analytics'" :class="adminTab === 'analytics' ? 'bg-[#00E5FF] text-black font-bold' : 'bg-black text-white'" class="flex-1 py-3 bebas text-2xl transition-all border-l-4 border-white">📊 BAND ANALYTICS & SHARE DASHBOARD</button>
                     </div>
+
+                    <!-- SUBMISSIONS TAB -->
+                    <div x-show="adminTab === 'submissions'" class="space-y-8">
+                        <!-- Toggle Single vs Bulk -->
+                        <div class="flex gap-4">
+                            <button @click="bulkMode = false" :class="!bulkMode ? 'bg-[#CCFF00] text-black' : 'bg-black text-white'" class="px-6 py-2 bebas text-2xl border-4 border-black">SINGLE SUBMISSION</button>
+                            <button @click="bulkMode = true" :class="bulkMode ? 'bg-[#CCFF00] text-black' : 'bg-black text-white'" class="px-6 py-2 bebas text-2xl border-4 border-black">BULK CSV IMPORT</button>
+                        </div>
 
                     <!-- Single Submission Form -->
                     <div x-show="!bulkMode" class="brutal-card p-6 bg-white text-black">
@@ -1675,6 +1317,372 @@ def main():
                                 </template>
                             </tbody>
                         </table>
+                    </div>
+                    </div>
+
+                    <!-- ANALYTICS TAB -->
+                    <div x-show="adminTab === 'analytics'" class="space-y-8">
+                        <!-- Sub-Navigation for Analytics -->
+                        <div class="flex border-4 border-white overflow-hidden">
+                            <button @click="analyticsSubTab = 'overview'" :class="analyticsSubTab === 'overview' ? 'bg-[#00E5FF] text-black font-bold' : 'bg-black text-white'" class="flex-1 py-3 bebas text-2xl transition-all">📊 OVERVIEW & BAND TRACKER</button>
+                            <button @click="analyticsSubTab = 'shares'" :class="analyticsSubTab === 'shares' ? 'bg-[#FF5733] text-black font-bold' : 'bg-black text-white'" class="flex-1 py-3 bebas text-2xl transition-all border-l-4 border-white">🚀 SHARE IMPACT DASHBOARD</button>
+                        </div>
+
+                        <!-- OVERVIEW SUB-TAB -->
+                        <div x-show="analyticsSubTab === 'overview'" class="space-y-8">
+                            <!-- Section 1: Overview Cards -->
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                                <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                                    <p class="mono text-xs text-gray-500 uppercase font-bold">Bands Tracked</p>
+                                    <h3 class="bebas text-5xl mt-2" x-text="totalBandsTracked"></h3>
+                                    <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Historical Snapshot Audit</p>
+                                </div>
+                                <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                                    <p class="mono text-xs text-gray-500 uppercase font-bold">Total Listeners</p>
+                                    <h3 class="bebas text-5xl mt-2 acid-lime" x-text="totalListeners"></h3>
+                                    <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Combined Spotify Audience</p>
+                                </div>
+                                <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                                    <p class="mono text-xs text-gray-500 uppercase font-bold">Avg WoW Growth</p>
+                                    <h3 class="bebas text-5xl mt-2" :class="avgWowGrowth.startsWith('+') ? 'text-green-600' : 'text-red-600'" x-text="avgWowGrowth"></h3>
+                                    <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Weekly Portfolio Velocity</p>
+                                </div>
+                                <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                                    <p class="mono text-xs text-gray-500 uppercase font-bold">Most Explosive Act</p>
+                                    <h3 class="bebas text-4xl mt-2 truncate text-purple-700" x-text="mostExplosiveBand"></h3>
+                                    <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Top Weekly Velocity</p>
+                                </div>
+                            </div>
+
+                            <!-- Filters & Controls -->
+                            <div class="flex flex-wrap items-center justify-between gap-4 bg-gray-900 p-4 border-4 border-white">
+                                <div class="flex flex-wrap gap-2">
+                                    <button @click="analyticsFilter = 'all'" :class="analyticsFilter === 'all' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">ALL BANDS</button>
+                                    <button @click="analyticsFilter = 'explosive'" :class="analyticsFilter === 'explosive' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">🚀 EXPLOSIVE ONLY</button>
+                                    <button @click="analyticsFilter = 'featured'" :class="analyticsFilter === 'featured' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">🔥 FEATURED BY US</button>
+                                    <button @click="analyticsFilter = 'shared'" :class="analyticsFilter === 'shared' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">📲 SHARED BANDS</button>
+                                    <button @click="analyticsFilter = 'under100k'" :class="analyticsFilter === 'under100k' ? 'bg-[#CCFF00] text-black font-bold' : 'text-white'" class="px-3 py-1.5 mono text-xs uppercase border border-white">💎 HIDDEN GEMS (&lt;100K)</button>
+                                </div>
+
+                                <div class="flex items-center gap-2 mono text-xs">
+                                    <span class="text-gray-400 uppercase font-bold">SORT BY:</span>
+                                    <select x-model="analyticsSortKey" class="bg-black text-white p-2 border border-white focus:outline-none uppercase font-bold">
+                                        <option value="momentum_score">Momentum Score</option>
+                                        <option value="latest_listener_count">Listeners</option>
+                                        <option value="week_over_week_growth_pct">WoW Growth %</option>
+                                        <option value="month_over_month_growth_pct">MoM Growth %</option>
+                                        <option value="band_name">Band Name</option>
+                                    </select>
+                                    <button @click="analyticsSortAsc = !analyticsSortAsc" class="bg-white text-black p-2 font-bold border border-white" x-text="analyticsSortAsc ? '▲' : '▼'"></button>
+                                </div>
+                            </div>
+
+                            <!-- Section 2: Sortable Band Table -->
+                            <div class="brutal-card p-6 bg-white text-black overflow-x-auto">
+                                <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
+                                    <span>BAND GROWTH TRACKER</span>
+                                    <span class="mono text-xs font-normal text-gray-500" x-text="'Showing ' + filteredAnalytics.length + ' bands'"></span>
+                                </h3>
+
+                                <table class="w-full text-left border-collapse mono text-xs">
+                                    <thead>
+                                        <tr class="bg-black text-white uppercase">
+                                            <th class="p-3 border border-black cursor-pointer hover:bg-gray-800" @click="analyticsSortKey = 'band_name'; analyticsSortAsc = !analyticsSortAsc">BAND NAME</th>
+                                            <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-right" @click="analyticsSortKey = 'latest_listener_count'; analyticsSortAsc = !analyticsSortAsc">LISTENERS</th>
+                                            <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-right" @click="analyticsSortKey = 'week_over_week_growth_pct'; analyticsSortAsc = !analyticsSortAsc">WoW %</th>
+                                            <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-right" @click="analyticsSortKey = 'month_over_month_growth_pct'; analyticsSortAsc = !analyticsSortAsc">MoM %</th>
+                                            <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-center" @click="analyticsSortKey = 'momentum_score'; analyticsSortAsc = !analyticsSortAsc">MOMENTUM</th>
+                                            <th class="p-3 border border-black cursor-pointer hover:bg-gray-800 text-center" @click="analyticsSortKey = 'growth_trajectory'; analyticsSortAsc = !analyticsSortAsc">TRAJECTORY</th>
+                                            <th class="p-3 border border-black text-center">ACTION</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <template x-for="band in filteredAnalytics" :key="band.id || band.band_name">
+                                            <tr class="hover:bg-yellow-100 transition-colors cursor-pointer" @click="openBandModal(band)">
+                                                <td class="p-3 border border-black font-bold text-sm">
+                                                    <div class="flex items-center gap-2">
+                                                        <span x-text="band.band_name"></span>
+                                                        <template x-if="band.total_features > 0">
+                                                            <span class="bg-black text-yellow-300 text-[9px] px-1.5 py-0.5 font-bold uppercase">FEATURED</span>
+                                                        </template>
+                                                    </div>
+                                                </td>
+                                                <td class="p-3 border border-black text-right font-bold text-sm" x-text="(band.latest_listener_count || 0).toLocaleString()"></td>
+                                                <td class="p-3 border border-black text-right font-bold" :class="(band.week_over_week_growth_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((band.week_over_week_growth_pct || 0) >= 0 ? '+' : '') + (band.week_over_week_growth_pct || 0) + '%'"></td>
+                                                <td class="p-3 border border-black text-right font-bold" :class="(band.month_over_month_growth_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((band.month_over_month_growth_pct || 0) >= 0 ? '+' : '') + (band.month_over_month_growth_pct || 0) + '%'"></td>
+                                                <td class="p-3 border border-black text-center">
+                                                    <div class="inline-block bg-black text-[#CCFF00] font-bold px-2.5 py-1 text-xs border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                                                        🔥 <span x-text="band.momentum_score || 0"></span>/100
+                                                    </div>
+                                                </td>
+                                                <td class="p-3 border border-black text-center font-bold">
+                                                    <span x-show="band.growth_trajectory === 'explosive'" class="bg-purple-200 text-purple-900 border border-purple-800 px-2 py-0.5 text-[10px] uppercase">📈 EXPLOSIVE</span>
+                                                    <span x-show="band.growth_trajectory === 'steady'" class="bg-green-200 text-green-900 border border-green-800 px-2 py-0.5 text-[10px] uppercase">📊 STEADY</span>
+                                                    <span x-show="band.growth_trajectory === 'flat'" class="bg-yellow-200 text-yellow-900 border border-yellow-800 px-2 py-0.5 text-[10px] uppercase">▬ FLAT</span>
+                                                    <span x-show="band.growth_trajectory === 'declining'" class="bg-red-200 text-red-900 border border-red-800 px-2 py-0.5 text-[10px] uppercase">📉 DECLINING</span>
+                                                </td>
+                                                <td class="p-3 border border-black text-center" @click.stop>
+                                                    <button @click="openBandModal(band)" class="bg-black text-white hover:bg-[#CCFF00] hover:text-black px-3 py-1 font-bold text-xs uppercase border border-black transition-colors">
+                                                        INSPECT
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        </template>
+
+                                        <template x-if="filteredAnalytics.length === 0">
+                                            <tr>
+                                                <td colspan="7" class="p-8 text-center text-gray-500 font-bold uppercase">NO ANALYTICS SNAPSHOTS RECORDED YET. RUN SUNDAY SNAPSHOT JOB.</td>
+                                            </tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <!-- Section 3: Visual Trends -->
+                            <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                                <!-- Bar Chart: Top Momentum Bands -->
+                                <div class="lg:col-span-7 brutal-card p-6 bg-white text-black">
+                                    <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase">🔥 TOP MOMENTUM BANDS THIS MONTH</h3>
+                                    <div class="space-y-3">
+                                        <template x-for="band in [...analyticsSummary].sort((a,b) => (b.momentum_score||0) - (a.momentum_score||0)).slice(0, 5)" :key="band.band_name">
+                                            <div>
+                                                <div class="flex justify-between text-xs mono font-bold uppercase mb-1">
+                                                    <span x-text="band.band_name"></span>
+                                                    <span x-text="(band.momentum_score || 0) + ' / 100'"></span>
+                                                </div>
+                                                <div class="w-full bg-gray-200 h-6 border-2 border-black relative overflow-hidden">
+                                                    <div class="bg-[#CCFF00] h-full transition-all duration-500 border-r-2 border-black" :style="'width: ' + Math.max(5, band.momentum_score || 0) + '%'"></div>
+                                                </div>
+                                            </div>
+                                        </template>
+                                        <template x-if="analyticsSummary.length === 0">
+                                            <p class="mono text-xs text-gray-500 uppercase">NO MOMENTUM DATA AVAILABLE YET.</p>
+                                        </template>
+                                    </div>
+                                </div>
+
+                                <!-- Trajectory Breakdown Card -->
+                                <div class="lg:col-span-5 brutal-card p-6 bg-white text-black flex flex-col justify-between">
+                                    <div>
+                                        <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase">📈 TRAJECTORY DISTRIBUTION</h3>
+                                        <div class="space-y-4 mono text-xs">
+                                            <div class="flex justify-between items-center p-3 bg-purple-100 border-2 border-black">
+                                                <span class="font-bold text-purple-900 uppercase">📈 EXPLOSIVE</span>
+                                                <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'explosive').length"></span>
+                                            </div>
+                                            <div class="flex justify-between items-center p-3 bg-green-100 border-2 border-black">
+                                                <span class="font-bold text-green-900 uppercase">📊 STEADY</span>
+                                                <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'steady').length"></span>
+                                            </div>
+                                            <div class="flex justify-between items-center p-3 bg-yellow-100 border-2 border-black">
+                                                <span class="font-bold text-yellow-900 uppercase">▬ FLAT</span>
+                                                <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'flat').length"></span>
+                                            </div>
+                                            <div class="flex justify-between items-center p-3 bg-red-100 border-2 border-black">
+                                                <span class="font-bold text-red-900 uppercase">📉 DECLINING</span>
+                                                <span class="bebas text-2xl" x-text="analyticsSummary.filter(b => b.growth_trajectory === 'declining').length"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- SHARE IMPACT DASHBOARD SUB-TAB -->
+                        <div x-show="analyticsSubTab === 'shares'" class="space-y-8">
+                            <!-- Share Impact Summary Stats -->
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                                <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                                    <p class="mono text-xs text-gray-500 uppercase font-bold">Total Bands Shared</p>
+                                    <h3 class="bebas text-5xl mt-2 text-orange-600" x-text="totalBandsShared"></h3>
+                                    <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Promoted on Socials</p>
+                                </div>
+                                <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                                    <p class="mono text-xs text-gray-500 uppercase font-bold">Avg Shares per Band</p>
+                                    <h3 class="bebas text-5xl mt-2" x-text="avgSharesPerBand"></h3>
+                                    <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Frequency Ratio</p>
+                                </div>
+                                <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                                    <p class="mono text-xs text-gray-500 uppercase font-bold">Most Shared Band</p>
+                                    <h3 class="bebas text-4xl mt-2 truncate text-purple-700" x-text="mostSharedBand"></h3>
+                                    <p class="mono text-[10px] text-gray-400 mt-1 uppercase">Top Shared Artist</p>
+                                </div>
+                                <div class="brutal-card p-6 bg-white text-black border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
+                                    <p class="mono text-xs text-gray-500 uppercase font-bold">High ROI Shares (&gt;10% Lift)</p>
+                                    <h3 class="bebas text-5xl mt-2 acid-lime" x-text="highImpactSharesCount"></h3>
+                                    <p class="mono text-[10px] text-gray-400 mt-1 uppercase">High Impact Conversions</p>
+                                </div>
+                            </div>
+
+                            <!-- Shared Bands Report Table -->
+                            <div class="brutal-card p-6 bg-white text-black overflow-x-auto">
+                                <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
+                                    <span>📲 SHARED BANDS PERFORMANCE REPORT</span>
+                                    <span class="mono text-xs font-normal text-gray-500" x-text="sharedBandsList.length + ' Bands Shared'"></span>
+                                </h3>
+
+                                <table class="w-full text-left border-collapse mono text-xs">
+                                    <thead>
+                                        <tr class="bg-black text-white uppercase">
+                                            <th class="p-3 border border-black">BAND NAME</th>
+                                            <th class="p-3 border border-black text-center">TIMES SHARED</th>
+                                            <th class="p-3 border border-black text-center">LAST SHARED WEEK</th>
+                                            <th class="p-3 border border-black text-center">MOMENTUM</th>
+                                            <th class="p-3 border border-black text-right">AVG LIFT AFTER SHARE %</th>
+                                            <th class="p-3 border border-black text-right">LATEST SHARE LIFT</th>
+                                            <th class="p-3 border border-black text-center">ACTION</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <template x-for="band in sharedBandsList" :key="band.id || band.band_name">
+                                            <tr class="hover:bg-orange-50 transition-colors cursor-pointer" @click="openBandModal(band)">
+                                                <td class="p-3 border border-black font-bold text-sm" x-text="band.band_name"></td>
+                                                <td class="p-3 border border-black text-center font-bold" x-text="band.total_shares"></td>
+                                                <td class="p-3 border border-black text-center" x-text="band.last_shared_week || 'N/A'"></td>
+                                                <td class="p-3 border border-black text-center">
+                                                    <div class="inline-block bg-black text-[#CCFF00] font-bold px-2 py-0.5 text-xs">
+                                                        🔥 <span x-text="band.momentum_score || 0"></span>
+                                                    </div>
+                                                </td>
+                                                <td class="p-3 border border-black text-right font-bold" :class="(band.avg_growth_after_share_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((band.avg_growth_after_share_pct || 0) >= 0 ? '+' : '') + (band.avg_growth_after_share_pct || 0) + '%'"></td>
+                                                <td class="p-3 border border-black text-right font-bold" :class="(band.share_lift_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((band.share_lift_pct || 0) >= 0 ? '+' : '') + (band.share_lift_pct || 0) + '% (' + (band.share_lift_absolute >= 0 ? '+' : '') + (band.share_lift_absolute || 0) + ')'"></td>
+                                                <td class="p-3 border border-black text-center" @click.stop>
+                                                    <button @click="openBandModal(band)" class="bg-black text-white hover:bg-[#CCFF00] hover:text-black px-3 py-1 font-bold text-xs uppercase border border-black">
+                                                        INSPECT
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        </template>
+                                        <template x-if="sharedBandsList.length === 0">
+                                            <tr>
+                                                <td colspan="7" class="p-8 text-center text-gray-500 font-bold uppercase">NO BANDS SHARED YET. RECORD SHARED INTERACTIONS IN ADMIN TAB.</td>
+                                            </tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <!-- Master Share Decision Matrix Widget (The 5 Tiers) -->
+                            <div class="brutal-card p-6 bg-white text-black">
+                                <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
+                                    <span>🎯 MASTER SHARE DECISION MATRIX (5 TIERS)</span>
+                                    <span class="mono text-xs text-gray-500 font-normal">Analytics & Historical Curation Rules</span>
+                                </h3>
+
+                                <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+                                    <div class="p-3 bg-green-100 border-2 border-black mono">
+                                        <p class="text-[10px] text-green-900 font-bold uppercase">TIER 1: DEFINITE YES 🚀</p>
+                                        <p class="bebas text-xl mt-1 text-green-950">Proven engagement</p>
+                                        <p class="text-[9px] text-gray-600 mt-1">Shared before & Avg Score &ge; 1.8</p>
+                                    </div>
+                                    <div class="p-3 bg-lime-100 border-2 border-black mono">
+                                        <p class="text-[10px] text-lime-900 font-bold uppercase">TIER 2: LIKELY YES ✅</p>
+                                        <p class="bebas text-xl mt-1 text-lime-950">Track record</p>
+                                        <p class="text-[9px] text-gray-600 mt-1">Shared before & Saves &gt; 80</p>
+                                    </div>
+                                    <div class="p-3 bg-amber-100 border-2 border-black mono">
+                                        <p class="text-[10px] text-amber-900 font-bold uppercase">TIER 3: MAYBE ⚡</p>
+                                        <p class="bebas text-xl mt-1 text-amber-950">Unproven but hot</p>
+                                        <p class="text-[9px] text-gray-600 mt-1">Never shared & Saves &gt; 100</p>
+                                    </div>
+                                    <div class="p-3 bg-blue-100 border-2 border-black mono">
+                                        <p class="text-[10px] text-blue-900 font-bold uppercase">TIER 4: LET IT COOK 💭</p>
+                                        <p class="bebas text-xl mt-1 text-blue-950">Building momentum</p>
+                                        <p class="text-[9px] text-gray-600 mt-1">Never shared & Featured &ge; 2x</p>
+                                    </div>
+                                    <div class="p-3 bg-red-100 border-2 border-black mono">
+                                        <p class="text-[10px] text-red-900 font-bold uppercase">TIER 5: SKIP ❌</p>
+                                        <p class="bebas text-xl mt-1 text-red-950">Low track record</p>
+                                        <p class="text-[9px] text-gray-600 mt-1">Featured multiple times, low response</p>
+                                    </div>
+                                </div>
+
+                                <!-- Band Evaluator Quick Search in Matrix -->
+                                <div x-data="{ evalBand: 'Ellen May' }" class="p-4 bg-gray-900 text-white border-2 border-black">
+                                    <label class="block mono text-xs font-bold uppercase mb-2 text-[#CCFF00]">EVALUATE ANY BAND AGAINST FRAMEWORK:</label>
+                                    <div class="flex flex-col sm:flex-row gap-3">
+                                        <input type="text" x-model="evalBand" placeholder="Type band name (e.g. RATSALAD)..." class="flex-1 bg-black text-white p-2 border border-white mono text-sm">
+                                    </div>
+
+                                    <div class="mt-4 p-3 bg-white text-black border-2 border-black flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                                        <div>
+                                            <h4 class="bebas text-3xl leading-none" x-text="evalBand || 'Band Name'"></h4>
+                                            <p class="mono text-xs text-gray-600 mt-1 uppercase">
+                                                Featured: <strong x-text="getBandShareDecision(evalBand).appearances + 'x'"></strong> &middot;
+                                                Shared: <strong x-text="getBandShareDecision(evalBand).times_shared + 'x'"></strong> &middot;
+                                                Success Rate: <strong x-text="getBandShareDecision(evalBand).success_rate_pct + '%'"></strong> &middot;
+                                                Saves: <strong x-text="getBandShareDecision(evalBand).total_saves"></strong> &middot;
+                                                Avg Score: <strong x-text="getBandShareDecision(evalBand).avg_interaction"></strong>
+                                            </p>
+                                        </div>
+                                        <span :class="getBandShareDecision(evalBand).badge_bg + ' ' + getBandShareDecision(evalBand).badge_text"
+                                              class="px-4 py-2 font-bold border-2 border-black bebas text-xl uppercase tracking-wide"
+                                              x-text="getBandShareDecision(evalBand).recommendation"></span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Grid: Recommendations & High ROI Shares -->
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                <!-- Next Share Recommendations Widget -->
+                                <div class="brutal-card p-6 bg-white text-black">
+                                    <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
+                                        <span>🚀 NEXT SHARE CANDIDATES</span>
+                                        <span class="mono text-xs text-gray-500 font-normal">Momentum &gt; 70 &bull; Not Shared</span>
+                                    </h3>
+                                    <div class="space-y-3">
+                                        <template x-for="candidate in shareCandidates" :key="candidate.id || candidate.band_name">
+                                            <div class="p-3 border-2 border-black bg-yellow-50 flex items-center justify-between shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                                                <div>
+                                                    <h4 class="bebas text-2xl leading-none" x-text="candidate.band_name"></h4>
+                                                    <p class="mono text-[10px] text-gray-600 mt-1 uppercase">
+                                                        Listeners: <strong x-text="(candidate.latest_listener_count || 0).toLocaleString()"></strong> &middot;
+                                                        WoW: <strong :class="(candidate.week_over_week_growth_pct || 0) >= 0 ? 'text-green-700' : 'text-red-600'" x-text="((candidate.week_over_week_growth_pct || 0) >= 0 ? '+' : '') + candidate.week_over_week_growth_pct + '%'"></strong>
+                                                    </p>
+                                                </div>
+                                                <div class="flex items-center gap-3">
+                                                    <span class="bg-black text-[#CCFF00] font-bold px-2 py-1 mono text-xs">🔥 <span x-text="candidate.momentum_score"></span>/100</span>
+                                                    <button @click="openBandModal(candidate)" class="bg-[#CCFF00] text-black hover:bg-black hover:text-white px-3 py-1 bebas text-lg border border-black transition-colors uppercase">
+                                                        RECOMMEND
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </template>
+                                        <template x-if="shareCandidates.length === 0">
+                                            <p class="mono text-xs text-gray-500 uppercase font-bold p-4 text-center">NO UNSHARED CANDIDATES WITH MOMENTUM &gt; 70 CURRENTLY.</p>
+                                        </template>
+                                    </div>
+                                </div>
+
+                                <!-- High ROI Shares Report -->
+                                <div class="brutal-card p-6 bg-white text-black">
+                                    <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase flex justify-between items-center">
+                                        <span>🔥 HIGH ROI SHARES REPORT</span>
+                                        <span class="mono text-xs text-gray-500 font-normal">&gt;10% Lift After Share</span>
+                                    </h3>
+                                    <div class="space-y-3">
+                                        <template x-for="roi in highRoiSharesList" :key="roi.id || roi.band_name">
+                                            <div class="p-3 border-2 border-black bg-green-50 flex items-center justify-between shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                                                <div>
+                                                    <h4 class="bebas text-2xl leading-none" x-text="roi.band_name"></h4>
+                                                    <p class="mono text-[10px] text-gray-600 mt-1 uppercase">
+                                                        Shared: <strong x-text="roi.total_shares + 'x'"></strong> &middot;
+                                                        Last: <strong x-text="roi.last_shared_week"></strong> &middot;
+                                                        Listeners: <strong x-text="(roi.latest_listener_count || 0).toLocaleString()"></strong>
+                                                    </p>
+                                                </div>
+                                                <div class="text-right">
+                                                    <span class="bebas text-2xl text-green-700 block" x-text="'+' + roi.avg_growth_after_share_pct + '% LIFT'"></span>
+                                                </div>
+                                            </div>
+                                        </template>
+                                        <template x-if="highRoiSharesList.length === 0">
+                                            <p class="mono text-xs text-gray-500 uppercase font-bold p-4 text-center">NO HIGH-ROI SHARES (&gt;10% LIFT) RECORDED YET.</p>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
