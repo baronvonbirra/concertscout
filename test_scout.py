@@ -44,8 +44,8 @@ class TestScoutV2(unittest.TestCase):
         url = scout.resolve_instagram_via_search("HAWXX")
         self.assertEqual(url, "https://www.instagram.com/hawxxmusic/")
 
-    @patch('scout.requests.get')
-    def test_scrape_lastfm_artist_events(self, mock_get):
+    @patch('scout.robust_request')
+    def test_scrape_lastfm_artist_events(self, mock_robust_request):
         mock_res = MagicMock()
         mock_res.status_code = 200
         mock_res.text = """
@@ -57,7 +57,7 @@ class TestScoutV2(unittest.TestCase):
             </div>
         </html>
         """
-        mock_get.return_value = mock_res
+        mock_robust_request.return_value = mock_res
 
         events = scout.scrape_lastfm_artist_events("HAWXX")
         self.assertEqual(len(events), 1)
@@ -65,6 +65,54 @@ class TestScoutV2(unittest.TestCase):
         self.assertEqual(events[0]["city"], "Madrid")
         self.assertEqual(events[0]["venue"], "Wurlitzer Ballroom")
         self.assertEqual(events[0]["event_date"], "2026-10-15")
+
+    @patch('scout.robust_request')
+    def test_scrape_lastfm_artist_events_url_encoding(self, mock_robust_request):
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.text = "<html></html>"
+        mock_robust_request.return_value = mock_res
+
+        scout.scrape_lastfm_artist_events("赤いくらげ")
+
+        self.assertTrue(mock_robust_request.called)
+        called_url = mock_robust_request.call_args[0][1]
+        self.assertEqual(called_url, "https://www.last.fm/music/%E8%B5%A4%E3%81%84%E3%81%8F%E3%82%89%E3%81%92/+events")
+
+    @patch('scout.requests.get')
+    def test_robust_request_circuit_breaker_threshold(self, mock_get):
+        scout.LASTFM_BLOCKED = False
+        scout._DOMAIN_FAILURES["last.fm"] = 0
+
+        mock_blocked_res = MagicMock()
+        mock_blocked_res.status_code = 406
+        mock_ok_res = MagicMock()
+        mock_ok_res.status_code = 200
+
+        mock_get.return_value = mock_blocked_res
+
+        # Attempt 1: 406 failure -> counter = 1, not blocked yet
+        scout.robust_request("GET", "https://www.last.fm/music/band1/+events", max_retries=1, initial_delay=0)
+        self.assertFalse(scout.LASTFM_BLOCKED)
+        self.assertEqual(scout._DOMAIN_FAILURES["last.fm"], 1)
+
+        # Attempt 2: 406 failure -> counter = 2, not blocked yet
+        scout.robust_request("GET", "https://www.last.fm/music/band2/+events", max_retries=1, initial_delay=0)
+        self.assertFalse(scout.LASTFM_BLOCKED)
+        self.assertEqual(scout._DOMAIN_FAILURES["last.fm"], 2)
+
+        # Success resets counter
+        mock_get.return_value = mock_ok_res
+        scout.robust_request("GET", "https://www.last.fm/music/band3/+events", max_retries=1, initial_delay=0)
+        self.assertFalse(scout.LASTFM_BLOCKED)
+        self.assertEqual(scout._DOMAIN_FAILURES["last.fm"], 0)
+
+        # 3 consecutive 406 failures trigger circuit breaker
+        mock_get.return_value = mock_blocked_res
+        for i in range(3):
+            scout.robust_request("GET", f"https://www.last.fm/music/band{i}/+events", max_retries=1, initial_delay=0)
+        self.assertTrue(scout.LASTFM_BLOCKED)
+        self.assertEqual(scout._DOMAIN_FAILURES["last.fm"], 3)
 
     @patch('scout.requests.post')
     def test_check_instagram_tour_keywords(self, mock_post):
