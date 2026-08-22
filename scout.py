@@ -26,7 +26,7 @@ SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 if not all([SUPABASE_URL, SUPABASE_KEY]):
     print("Warning: Supabase credentials not fully set.")
 if not LASTFM_API_KEY:
-    print("Warning: LASTFM_API_KEY not set. Last.fm event matching will be skipped.")
+    print("Warning: LASTFM_API_KEY not set. Last.fm tour event matching (Phase 3) will be skipped (Note: Last.fm is not required for Monday playlist curation).")
 if not all([SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET]):
     print("Warning: Spotify Client ID or Secret not set. Ingestion will be skipped.")
 
@@ -157,9 +157,7 @@ def discover_punk_candidates(token):
     headers = {"Authorization": f"Bearer {token}"}
     candidates = {}
 
-    # Phase 2 rule: query Spotify for new releases in past 7 days
     execution_date = datetime.now().date()
-    start_date = execution_date - timedelta(days=7)
 
     def parse_release_date(date_str):
         if not date_str:
@@ -174,9 +172,9 @@ def discover_punk_candidates(token):
         except Exception:
             return None
 
-    def is_eligible(track_name, album_name, release_date_str):
+    def is_eligible(track_name, album_name, release_date_str, effective_start_date):
         rel_date = parse_release_date(release_date_str)
-        if not rel_date or rel_date < start_date or rel_date > execution_date:
+        if not rel_date or rel_date < effective_start_date or rel_date > execution_date:
             return False
 
         excluded_keywords = ["remix", "compilation", "live", "acoustic", "demo", "instrumental", "remaster", "mix"]
@@ -186,50 +184,106 @@ def discover_punk_candidates(token):
                 return False
         return True
 
-    # Search defined punk genres: "punk", "punk rock", "pop punk", "hardcore", "ska", "celtic punk"
-    genres = ["punk", "punk rock", "pop punk", "hardcore", "ska", "celtic punk"]
-    print(f"Searching Spotify new releases for genres: {genres}...")
-    for genre in genres:
-        url = "https://api.spotify.com/v1/search"
-        params = {
-            "q": f'genre:"{genre}"',
-            "type": "track",
-            "market": "ES",
-            "limit": 50
-        }
-        time.sleep(0.5)
-        try:
-            res = requests.get(url, headers=headers, params=params, timeout=10)
-            if res.status_code == 200:
-                tracks = res.json().get("tracks", {}).get("items", [])
-                for track in tracks:
-                    track_id = track.get("id")
-                    track_name = track.get("name", "")
-                    album = track.get("album", {})
-                    album_name = album.get("name", "")
-                    release_date_str = album.get("release_date")
+    def process_track_item(track, effective_start_date):
+        if not track:
+            return
+        track_id = track.get("id")
+        if not track_id or track_id in candidates:
+            return
 
-                    if is_eligible(track_name, album_name, release_date_str):
-                        artists = track.get("artists", [])
-                        if artists:
-                            primary_artist = artists[0]
-                            artist_id = primary_artist.get("id")
-                            artist_name = primary_artist.get("name")
+        track_name = track.get("name", "")
+        album = track.get("album", {})
+        album_name = album.get("name", "")
+        release_date_str = album.get("release_date")
 
-                            if track_id not in candidates:
-                                candidates[track_id] = {
-                                    "track_id": track_id,
-                                    "track_name": track_name,
-                                    "album_name": album_name,
-                                    "release_date": release_date_str,
-                                    "artist_id": artist_id,
-                                    "artist_name": artist_name,
-                                    "spotify_id": artist_id
-                                }
-        except Exception as e:
-            print(f"Error performing genre search for '{genre}': {e}")
+        if is_eligible(track_name, album_name, release_date_str, effective_start_date):
+            artists = track.get("artists", [])
+            if artists:
+                primary_artist = artists[0]
+                artist_id = primary_artist.get("id")
+                artist_name = primary_artist.get("name")
 
-    print(f"Discovered {len(candidates)} candidates matching release window.")
+                if artist_id:
+                    candidates[track_id] = {
+                        "track_id": track_id,
+                        "track_name": track_name,
+                        "album_name": album_name,
+                        "release_date": release_date_str,
+                        "artist_id": artist_id,
+                        "artist_name": artist_name,
+                        "spotify_id": artist_id
+                    }
+
+    # Dynamic release window expansion tiers: 7 days, then 14 days, then 30 days
+    release_window_tiers = [7, 14, 30]
+
+    genres = [
+        "punk", "punk rock", "pop punk", "hardcore", "skate punk",
+        "post-punk", "melodic hardcore", "hardcore punk", "garage punk", "emo", "ska", "celtic punk"
+    ]
+
+    for window_days in release_window_tiers:
+        effective_start_date = execution_date - timedelta(days=window_days)
+        print(f"Searching Spotify candidate tracks (Release window: past {window_days} days, start date: {effective_start_date})...")
+
+        # 1. Search across expanded punk genres with pagination & tag/year queries
+        for genre in genres:
+            query_templates = [
+                f'genre:"{genre}"',
+                f'genre:"{genre}" tag:new',
+                f'genre:"{genre}" year:{execution_date.year}'
+            ]
+            for query in query_templates:
+                for offset in [0, 50]:
+                    url = "https://api.spotify.com/v1/search"
+                    params = {
+                        "q": query,
+                        "type": "track",
+                        "market": "ES",
+                        "limit": 50,
+                        "offset": offset
+                    }
+                    time.sleep(0.5)
+                    try:
+                        res = requests.get(url, headers=headers, params=params, timeout=10)
+                        if res.status_code == 200:
+                            tracks = res.json().get("tracks", {}).get("items", [])
+                            for track in tracks:
+                                process_track_item(track, effective_start_date)
+                    except Exception as e:
+                        print(f"Error performing search for '{query}' offset {offset}: {e}")
+
+        # 2. Query Spotify Browse New Releases API
+        for offset in [0, 50]:
+            browse_url = "https://api.spotify.com/v1/browse/new-releases"
+            browse_params = {"country": "ES", "limit": 50, "offset": offset}
+            time.sleep(0.5)
+            try:
+                b_res = requests.get(browse_url, headers=headers, params=browse_params, timeout=10)
+                if b_res.status_code == 200:
+                    albums = b_res.json().get("albums", {}).get("items", [])
+                    for album in albums:
+                        album_id = album.get("id")
+                        album_name = album.get("name", "")
+                        release_date_str = album.get("release_date")
+                        # Fetch album tracks if album might match punk or new release
+                        if album_id and parse_release_date(release_date_str) and parse_release_date(release_date_str) >= effective_start_date:
+                            t_url = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
+                            time.sleep(0.5)
+                            t_res = requests.get(t_url, headers=headers, params={"limit": 10}, timeout=10)
+                            if t_res.status_code == 200:
+                                a_tracks = t_res.json().get("items", [])
+                                for tr in a_tracks:
+                                    # Attach album info to track object for process_track_item
+                                    tr["album"] = {"name": album_name, "release_date": release_date_str}
+                                    process_track_item(tr, effective_start_date)
+            except Exception as e:
+                print(f"Error fetching browse new releases offset {offset}: {e}")
+
+        print(f"Discovered {len(candidates)} candidates matching past {window_days}-day release window.")
+        if len(candidates) >= 15:
+            break
+
     classified_candidates = []
 
     for t_id, item in candidates.items():
@@ -313,7 +367,7 @@ def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, cu
 
     curr_w_num = parse_week_num(current_week)
 
-    def is_band_excluded(band_name):
+    def is_band_excluded(band_name, max_excluded_weeks=10):
         b_lower = band_name.lower()
         if b_lower not in band_registry_map:
             return False
@@ -321,39 +375,62 @@ def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, cu
         if not last_used:
             return False
         last_w_num = parse_week_num(last_used)
-        # Exclude if used in last 10 weeks
         if curr_w_num > 0 and last_w_num > 0:
-            if curr_w_num - last_w_num <= 10:
+            if curr_w_num - last_w_num <= max_excluded_weeks:
                 return True
         return False
-
-    # Filter candidates: 1 song per band per week
-    seen_bands = set()
-    eligible = []
 
     # Sort candidates: (listener_count ASC) -> (release_date DESC) -> random tie-break
     sorted_candidates = list(candidates)
     random.shuffle(sorted_candidates)  # tie-break
     sorted_candidates.sort(key=lambda c: (c.get("monthly_listeners", 0), c.get("release_date", "")))
 
-    for c in sorted_candidates:
-        b_name = c["artist_name"]
-        b_lower = b_name.lower()
-        if is_band_excluded(b_name):
-            continue
-        if b_lower in seen_bands:
-            continue
-        seen_bands.add(b_lower)
-        eligible.append(c)
+    active_playlist_artists = set(existing_playlist_artists) if existing_playlist_artists else set()
 
-    # Pick up to 10
-    selected_tracks = eligible[:10]
+    # Multi-stage relaxation ladder for exclusion window: 10 weeks -> 4 weeks -> 0 weeks (no recency cap)
+    # Relaxation only triggers if candidate pool has at least 10 candidates to reach the 10-track target
+    exclusion_tiers = [10, 4, 0]
+    selected_tracks = []
+    seen_bands = set()
+    total_unique_candidate_bands = len({c["artist_name"].lower() for c in sorted_candidates})
 
-    # Enforce constraints:
-    # 1. Total listeners check: >= 80% of selected bands must be < 100k listeners
+    for max_weeks in exclusion_tiers:
+        for c in sorted_candidates:
+            if len(selected_tracks) >= 10:
+                break
+            b_name = c["artist_name"]
+            b_lower = b_name.lower()
+            a_id = c.get("artist_id")
+
+            if a_id and a_id in active_playlist_artists:
+                continue
+            if b_lower in seen_bands:
+                continue
+            if is_band_excluded(b_name, max_excluded_weeks=max_weeks):
+                continue
+
+            seen_bands.add(b_lower)
+            selected_tracks.append(c)
+
+        if len(selected_tracks) >= 10 or total_unique_candidate_bands < 10:
+            break
+        print(f"Relaxing band registry recency exclusion to {max_weeks} weeks (currently selected {len(selected_tracks)} tracks)...")
+
+    # Final padding fallback: if still under 10 tracks and total candidate pool >= 10, allow candidates already on active playlist
+    if len(selected_tracks) < 10 and total_unique_candidate_bands >= 10:
+        print(f"Applying final padding fallback (allowing active playlist artists if needed)...")
+        for c in sorted_candidates:
+            if len(selected_tracks) >= 10:
+                break
+            b_name = c["artist_name"]
+            b_lower = b_name.lower()
+            if b_lower in seen_bands:
+                continue
+            seen_bands.add(b_lower)
+            selected_tracks.append(c)
+
+    # Enforce constraints reporting:
     under_100k_count = sum(1 for t in selected_tracks if t.get("monthly_listeners", 0) < 100000)
-
-    # 2. Diversity check: >= 50% must NOT appear in top50
     not_top50_count = sum(1 for t in selected_tracks if t["artist_name"].lower() not in top50_bands)
 
     if len(selected_tracks) < 10:
