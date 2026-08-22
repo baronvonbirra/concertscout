@@ -172,7 +172,8 @@ CREATE TABLE IF NOT EXISTS band_listener_snapshot (
     recorded_date DATE DEFAULT CURRENT_DATE,
     snapshot_week VARCHAR,
     source VARCHAR DEFAULT 'spotify_api',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT unique_band_date UNIQUE (band_name, recorded_date)
 );
 CREATE INDEX IF NOT EXISTS idx_band_listener_snapshot_band_date ON band_listener_snapshot (band_name, recorded_date);
 
