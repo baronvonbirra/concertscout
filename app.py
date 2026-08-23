@@ -148,7 +148,10 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 @st.cache_resource
 def get_supabase_client():
     if SUPABASE_URL and SUPABASE_KEY:
-        return create_client(SUPABASE_URL, SUPABASE_KEY, options=ClientOptions(realtime=None))
+        try:
+            return create_client(SUPABASE_URL, SUPABASE_KEY, options=ClientOptions(realtime=None))
+        except Exception:
+            return None
     return None
 
 supabase = get_supabase_client()
@@ -396,8 +399,16 @@ def main():
 
             get mostExplosiveBand() {
                 if (this.analyticsSummary.length === 0) return 'N/A';
-                const explosive = [...this.analyticsSummary].sort((a, b) => (b.week_over_week_growth_pct || 0) - (a.week_over_week_growth_pct || 0));
-                return explosive[0] ? explosive[0].band_name : 'N/A';
+                // Filter for acts with positive WoW growth (> 0) or explosive trajectory/momentum
+                const candidates = [...this.analyticsSummary].filter(b => (b.week_over_week_growth_pct || 0) > 0 || b.growth_trajectory === 'explosive');
+                if (candidates.length === 0) return 'N/A';
+                candidates.sort((a, b) => {
+                    const wowA = a.week_over_week_growth_pct || 0;
+                    const wowB = b.week_over_week_growth_pct || 0;
+                    if (wowA !== wowB) return wowB - wowA;
+                    return (b.momentum_score || 0) - (a.momentum_score || 0);
+                });
+                return candidates[0] ? candidates[0].band_name + ' (+' + candidates[0].week_over_week_growth_pct + '%)' : 'N/A';
             },
 
             get totalBandsShared() {

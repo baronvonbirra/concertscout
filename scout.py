@@ -1267,13 +1267,66 @@ def run_enrichment_pipeline():
     # Experimental keyword checks on Instagram
     scan_instagram_enrichment()
 
-def calculate_momentum_score(wow_growth_pct, mom_growth_pct, total_growth_pct):
+def calculate_momentum_score(wow_growth_pct, mom_growth_pct, total_growth_pct, trajectory="flat", total_features=0, total_shares=0, latest_listener_count=0, avg_growth_after_share_pct=0.0):
     wow = float(wow_growth_pct or 0)
     mom = float(mom_growth_pct or 0)
     tot = float(total_growth_pct or 0)
 
-    recent_weight = (wow * 0.5) + (mom * 0.3) + ((tot / 10.0) * 0.2)
-    score = int(round(recent_weight))
+    # 1. Growth Rate Component (Up to 50 points)
+    # WoW growth score (Up to 25 pts)
+    wow_score = 0.0
+    if wow > 0:
+        wow_score = min(25.0, 10.0 + (wow * 1.5))
+
+    # MoM growth score (Up to 15 pts)
+    mom_score = 0.0
+    if mom > 0:
+        mom_score = min(15.0, 5.0 + (mom * 0.5))
+
+    # Total growth score (Up to 10 pts)
+    tot_score = 0.0
+    if tot > 0:
+        tot_score = min(10.0, tot * 0.1)
+
+    growth_component = wow_score + mom_score + tot_score
+
+    # 2. Trajectory Bonus Component (Up to 15 points)
+    traj_score = 0.0
+    if trajectory == "explosive":
+        traj_score = 15.0
+    elif trajectory == "steady":
+        traj_score = 5.0
+
+    # 3. Engagement & Activity Component (Up to 20 points)
+    # Featured in playlists (5 pts per feature, max 10)
+    feat_score = min(10.0, float(total_features or 0) * 5.0)
+    # Social shares (5 pts per share, max 10)
+    share_score = min(10.0, float(total_shares or 0) * 5.0)
+
+    engagement_component = feat_score + share_score
+
+    # 4. Scale Baseline & Share Lift Component (Up to 15 points)
+    scale_score = 0.0
+    listeners = int(latest_listener_count or 0)
+    if listeners >= 100000:
+        scale_score = 10.0
+    elif listeners >= 10000:
+        scale_score = 7.0
+    elif listeners >= 1000:
+        scale_score = 5.0
+    elif listeners > 0:
+        scale_score = 2.0
+
+    lift_score = 0.0
+    if float(avg_growth_after_share_pct or 0) > 0:
+        lift_score = 5.0
+
+    scale_component = scale_score + lift_score
+
+    total_score = growth_component + traj_score + engagement_component + scale_component
+    score = int(round(total_score))
+
+    # Floor at 0 for negative growth unless offset by engagement, cap at 100
     return max(0, min(100, score))
 
 def determine_trajectory(snapshots_desc):
@@ -1287,15 +1340,23 @@ def determine_trajectory(snapshots_desc):
         count = snapshots_desc[0].get("listener_count") or 0
         return "steady" if count > 0 else "flat"
 
-    recent = snapshots_desc[0].get("listener_count") or 0
+    recent = int(snapshots_desc[0].get("listener_count") or 0)
     # Compare with snapshot from 4+ positions back, or oldest available
     compare_idx = 4 if len(snapshots_desc) > 4 else len(snapshots_desc) - 1
-    previous = snapshots_desc[compare_idx].get("listener_count") or 0
+    previous = int(snapshots_desc[compare_idx].get("listener_count") or 0)
 
     if previous <= 0:
-        return "explosive" if recent > 0 else "flat"
+        if recent >= 1000:
+            return "explosive"
+        elif recent > 0:
+            return "steady"
+        else:
+            return "flat"
 
-    if recent > previous * 1.3:
+    gain = recent - previous
+
+    # Requiring both relative growth > 30% AND absolute gain >= 50 listeners to avoid micro-noise
+    if recent > previous * 1.3 and gain >= 50:
         return "explosive"
     elif recent >= previous * 0.9:
         return "steady"
@@ -1511,20 +1572,25 @@ def recalculate_analytics_summary():
         print(f"Error fetching snapshots for summary recalculation: {e}")
         return
 
-    # Group by band_name
-    band_snapshots = {}
+    # Group by normalized band_name (case-insensitive) to prevent duplicates
+    band_snapshots = {} # b_lower -> list of snapshots
+    band_canonical_names = {} # b_lower -> original case band name
+
     for s in all_snapshots:
-        bname = s.get("band_name", "").strip()
-        if not bname:
+        raw_bname = s.get("band_name", "").strip()
+        if not raw_bname:
             continue
-        if bname not in band_snapshots:
-            band_snapshots[bname] = []
-        band_snapshots[bname].append(s)
+        b_lower = raw_bname.lower()
+        if b_lower not in band_snapshots:
+            band_snapshots[b_lower] = []
+            band_canonical_names[b_lower] = raw_bname
+        band_snapshots[b_lower].append(s)
 
     print(f"Recalculating analytics summary for {len(band_snapshots)} bands with snapshot data...")
 
     summary_records = []
-    for bname, snaps in band_snapshots.items():
+    for b_lower, snaps in band_snapshots.items():
+        bname = band_canonical_names.get(b_lower, b_lower)
         # Sorted by date ASC
         snaps.sort(key=lambda x: str(x.get("recorded_date", "")))
 
@@ -1553,6 +1619,14 @@ def recalculate_analytics_summary():
         except Exception:
             days_tracked = 1
 
+        # Helper to find first non-zero snapshot count in list
+        def get_first_nonzero_count(snap_list):
+            for s in snap_list:
+                val = int(s.get("listener_count") or 0)
+                if val > 0:
+                    return val
+            return 0
+
         # WoW Growth calculation (~7 days back)
         wow_growth = 0.00
         if len(snaps) > 1:
@@ -1570,8 +1644,13 @@ def recalculate_analytics_summary():
                 prev_7d_snap = snaps[-2]
 
             prev_count = int(prev_7d_snap.get("listener_count") or 0)
+            if prev_count == 0:
+                prev_count = get_first_nonzero_count(snaps[:-1])
+
             if prev_count > 0:
                 wow_growth = round(((latest_count - prev_count) / float(prev_count)) * 100.0, 2)
+            elif latest_count > 0:
+                wow_growth = 100.00
 
         # MoM Growth calculation (~30 days back)
         mom_growth = 0.00
@@ -1591,11 +1670,19 @@ def recalculate_analytics_summary():
 
             if prev_30d_snap:
                 prev_m_count = int(prev_30d_snap.get("listener_count") or 0)
+                if prev_m_count == 0:
+                    prev_m_count = get_first_nonzero_count(snaps[:-1])
+
                 if prev_m_count > 0:
                     mom_growth = round(((latest_count - prev_m_count) / float(prev_m_count)) * 100.0, 2)
+                elif latest_count > 0:
+                    mom_growth = 100.00
 
         # Total growth since first snapshot
         first_count = int(first_snap.get("listener_count") or 0)
+        if first_count == 0:
+            first_count = get_first_nonzero_count(snaps)
+
         if first_count > 0:
             total_growth = round(((latest_count - first_count) / float(first_count)) * 100.0, 2)
         else:
@@ -1608,7 +1695,6 @@ def recalculate_analytics_summary():
         trajectory = determine_trajectory(snaps_desc)
 
         # Feature info
-        b_lower = bname.lower()
         f_weeks = sorted(list(featured_history.get(b_lower, {}).get("weeks", [])))
         first_feat_week = f_weeks[0] if f_weeks else None
         last_feat_week = f_weeks[-1] if f_weeks else None
@@ -1641,6 +1727,9 @@ def recalculate_analytics_summary():
                 share_snap = next((s for s in snaps if s.get("snapshot_week") == s_week), None)
                 if not share_snap and s_num > 0:
                     share_snap = next((s for s in snaps if re.search(r"\d+", str(s.get("snapshot_week") or "")) and int(re.search(r"\d+", str(s.get("snapshot_week"))).group(0)) == s_num), None)
+                if not share_snap and snaps:
+                    # Fallback to closest snapshot or latest available
+                    share_snap = snaps[-1]
 
                 # Find snapshot for week after share
                 next_snap = next((s for s in snaps if s.get("snapshot_week") == f"W{s_num + 1}"), None)
@@ -1655,13 +1744,14 @@ def recalculate_analytics_summary():
                     except Exception:
                         pass
 
-                if share_snap and next_snap:
+                if share_snap:
                     at_cnt = int(share_snap.get("listener_count") or 0)
-                    after_cnt = int(next_snap.get("listener_count") or 0)
+                    after_cnt = int(next_snap.get("listener_count") or 0) if next_snap else latest_count
                     if at_cnt > 0:
                         l_pct = round(((after_cnt - at_cnt) / float(at_cnt)) * 100.0, 2)
                         l_abs = after_cnt - at_cnt
-                        lifts.append(l_pct)
+                        if next_snap:
+                            lifts.append(l_pct)
                         latest_valid_lift = {
                             "at": at_cnt,
                             "after": after_cnt,
@@ -1677,6 +1767,15 @@ def recalculate_analytics_summary():
                 listener_count_1week_after_share = latest_valid_lift["after"]
                 share_lift_pct = latest_valid_lift["pct"]
                 share_lift_absolute = latest_valid_lift["abs"]
+
+        momentum = calculate_momentum_score(
+            wow_growth, mom_growth, total_growth,
+            trajectory=trajectory,
+            total_features=tot_features,
+            total_shares=total_shares,
+            latest_listener_count=latest_count,
+            avg_growth_after_share_pct=avg_growth_after_share_pct
+        )
 
         summary_payload = {
             "band_name": bname,
