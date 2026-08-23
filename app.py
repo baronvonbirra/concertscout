@@ -134,7 +134,12 @@ import textwrap
 import os
 import json
 from datetime import datetime, timedelta
-from supabase import create_client, Client, ClientOptions
+try:
+    from supabase import create_client, Client, ClientOptions
+    HAS_SUPABASE_SDK = True
+except ImportError:
+    HAS_SUPABASE_SDK = False
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -145,13 +150,63 @@ st.set_page_config(page_title="PUNK-SCOUT V2.0", layout="wide")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
+class SimpleQueryBuilder:
+    def __init__(self, url, headers, table_name):
+        self.url = f"{url.rstrip('/')}/rest/v1/{table_name}"
+        self.headers = headers
+        self.params = {}
+
+    def select(self, columns="*"):
+        self.params["select"] = columns
+        return self
+
+    def order(self, column, desc=False):
+        self.params["order"] = f"{column}.{'desc' if desc else 'asc'}"
+        return self
+
+    def limit(self, count):
+        self.params["limit"] = str(count)
+        return self
+
+    def eq(self, column, value):
+        val_str = "true" if value is True else ("false" if value is False else str(value))
+        self.params[column] = f"eq.{val_str}"
+        return self
+
+    def gte(self, column, value):
+        self.params[column] = f"gte.{value}"
+        return self
+
+    def execute(self):
+        response = httpx.get(self.url, headers=self.headers, params=self.params, timeout=15.0)
+        response.raise_for_status()
+        class ResponseWrapper:
+            def __init__(self, data):
+                self.data = data
+        return ResponseWrapper(response.json())
+
+class SimpleSupabaseClient:
+    def __init__(self, url, key):
+        self.url = url
+        self.key = key
+        self.headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Accept": "application/json"
+        }
+
+    def table(self, table_name):
+        return SimpleQueryBuilder(self.url, self.headers, table_name)
+
 @st.cache_resource
 def get_supabase_client():
     if SUPABASE_URL and SUPABASE_KEY:
-        try:
-            return create_client(SUPABASE_URL, SUPABASE_KEY, options=ClientOptions(realtime=None))
-        except Exception:
-            return None
+        if HAS_SUPABASE_SDK:
+            try:
+                return create_client(SUPABASE_URL, SUPABASE_KEY, options=ClientOptions(realtime=None))
+            except Exception:
+                pass
+        return SimpleSupabaseClient(SUPABASE_URL, SUPABASE_KEY)
     return None
 
 supabase = get_supabase_client()

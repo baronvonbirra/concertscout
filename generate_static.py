@@ -15,10 +15,11 @@ def generate():
     with open("app.py", "r") as f:
         app_code = f.read()
 
-    # Define minimal requirements for the app.py to run in stlite
+    # Define minimal requirements for app.py to run in stlite
     # Note: 'streamlit' is built into stlite. 'requests' is not needed by app.py.
-    # Pinning supabase and httpx to ensure stability in stlite/pyodide environment.
-    requirements = ['supabase==2.4.5', 'httpx==0.27.2', 'pyodide-http', 'python-dotenv']
+    # app.py uses SimpleSupabaseClient with httpx when supabase package is not present,
+    # ensuring zero native/binary wheel dependencies (like pydantic-core) in Pyodide/stlite.
+    requirements = ['httpx==0.27.2', 'pyodide-http', 'python-dotenv']
 
     # IMPORTANT: GitHub Pages is a public hosting service.
     # The following credentials will be visible to any user who visits the site.
