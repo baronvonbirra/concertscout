@@ -212,15 +212,20 @@ class TestScoutV2(unittest.TestCase):
         self.assertTrue(mock_scrape.called)
 
     def test_calculate_momentum_score(self):
-        # wow=20%, mom=30%, tot=100% -> (20*0.5) + (30*0.3) + (10*0.2) = 10 + 9 + 2 = 21
+        # Multi-factor score test
+        # wow=20%, mom=30%, tot=100%
+        # wow_score = min(25, 10 + 30) = 25.0
+        # mom_score = min(15, 5 + 15) = 15.0
+        # tot_score = min(10, 100 * 0.1) = 10.0
+        # growth_component = 50.0
         score = scout.calculate_momentum_score(20, 30, 100)
-        self.assertEqual(score, 21)
+        self.assertEqual(score, 50)
 
-        # Capped at 100
-        score_high = scout.calculate_momentum_score(300, 200, 1000)
+        # High growth + trajectory + features + shares capped at 100
+        score_high = scout.calculate_momentum_score(300, 200, 1000, trajectory="explosive", total_features=2, total_shares=2, latest_listener_count=150000, avg_growth_after_share_pct=10.0)
         self.assertEqual(score_high, 100)
 
-        # Floor at 0
+        # Negative growth with no engagement -> floor at 0
         score_low = scout.calculate_momentum_score(-50, -50, -100)
         self.assertEqual(score_low, 0)
 
@@ -232,8 +237,18 @@ class TestScoutV2(unittest.TestCase):
             {"listener_count": 110000, "recorded_date": "2026-02-07"},
             {"listener_count": 100000, "recorded_date": "2026-01-31"}
         ]
-        # 150000 > 100000 * 1.3 (130000) -> explosive
+        # 150000 > 100000 * 1.3 (130000) and gain (50000 >= 50) -> explosive
         self.assertEqual(scout.determine_trajectory(snaps_explosive), "explosive")
+
+        snaps_micro_increase = [
+            {"listener_count": 14, "recorded_date": "2026-02-28"},
+            {"listener_count": 12, "recorded_date": "2026-02-21"},
+            {"listener_count": 10, "recorded_date": "2026-02-14"},
+            {"listener_count": 10, "recorded_date": "2026-02-07"},
+            {"listener_count": 10, "recorded_date": "2026-01-31"}
+        ]
+        # 14 > 10 * 1.3, but gain = 4 (< 50 listeners) -> steady, NOT explosive
+        self.assertEqual(scout.determine_trajectory(snaps_micro_increase), "steady")
 
         snaps_steady = [
             {"listener_count": 110000, "recorded_date": "2026-02-28"},
