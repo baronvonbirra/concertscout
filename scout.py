@@ -21,13 +21,15 @@ _monthly_listeners_cache = {}
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
+BANDSINTOWN_API_KEY = os.environ.get("BANDSINTOWN_API_KEY")
+SONGKICK_API_KEY = os.environ.get("SONGKICK_API_KEY")
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 
 if not all([SUPABASE_URL, SUPABASE_KEY]):
     print("Warning: Supabase credentials not fully set.")
-if not LASTFM_API_KEY:
-    print("Warning: LASTFM_API_KEY not set. Last.fm tour event matching (Phase 3) will be skipped (Note: Last.fm is not required for Monday playlist curation).")
+if not BANDSINTOWN_API_KEY:
+    print("Warning: BANDSINTOWN_API_KEY not set in environment. Bandsintown API calls will fall back to default identifier.")
 if not all([SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET]):
     print("Warning: Spotify Client ID or Secret not set. Ingestion will be skipped.")
 
@@ -1012,104 +1014,225 @@ def enrich_artists_instagram():
     except Exception as e:
         print(f"Error enriching artists with Instagram: {e}")
 
-def scrape_lastfm_artist_events(artist_name):
-    safe_artist = urllib.parse.quote(artist_name, safe='')
-    url = f"https://www.last.fm/music/{safe_artist}/+events"
-    headers = {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+def is_target_country(country_raw, target_countries):
+    """
+    Safely matches raw country string against target countries.
+    For 2-letter codes, enforces exact equality (e.g. 'ES' != 'Estonia').
+    For longer names, checks substring match (case-insensitive).
+    """
+    if not country_raw:
+        return False
+    c_raw_clean = country_raw.strip().upper()
+    c_raw_lower = country_raw.strip().lower()
+    for target in target_countries:
+        target_clean = target.strip().upper()
+        if len(target_clean) == 2:
+            if c_raw_clean == target_clean:
+                return True
+        else:
+            if target_clean.lower() in c_raw_lower:
+                return True
+    return False
 
-    events = []
+def get_tours_bandsintown(band_name, countries=None):
+    """
+    Query Bandsintown for upcoming tours of a band.
+    Filters for target countries (default: Spain 'ES', Portugal 'PT') and future dates.
+    """
+    if countries is None:
+        countries = ['ES', 'PT', 'Spain', 'Portugal', 'España', 'Espanha']
+
+    app_id = BANDSINTOWN_API_KEY or os.environ.get("BANDSINTOWN_API_KEY") or "concertscout"
+    today_str = datetime.now().date().isoformat()
+
     try:
-        res = robust_request("GET", url, headers=headers)
-        if res is None:
+        time.sleep(RATE_LIMIT_DELAY)
+        url = f"https://rest.bandsintown.com/artists/{urllib.parse.quote(band_name, safe='')}/events"
+        params = {"app_id": app_id}
+        res = requests.get(url, params=params, timeout=10)
+
+        if res.status_code == 404:
             return []
-        if res.status_code == 406:
-            print(f"Warning: Last.fm rate limited or blocked (406) for artist: {artist_name}")
+        if res.status_code != 200:
+            print(f"Bandsintown API status {res.status_code} for band '{band_name}'")
             return []
 
-        soup = BeautifulSoup(res.text, "html.parser")
+        all_events = res.json()
+        if not isinstance(all_events, list):
+            return []
 
-        items = soup.find_all(["tr", "li", "div"], class_=lambda x: x and ("events-list-item" in x or "event-list-item" in x or "events-item" in x))
+        filtered_events = []
+        for event in all_events:
+            venue = event.get("venue", {})
+            country_raw = venue.get("country", "")
+            city_raw = venue.get("city", "Unknown")
 
-        if not items:
-            event_links = [a for a in soup.find_all("a", href=True) if "/event/" in a["href"]]
-            seen_events = set()
-            for link in event_links:
-                href = link["href"]
-                if href in seen_events:
-                    continue
-                seen_events.add(href)
-
-                parent = link.find_parent(["tr", "li", "div", "article"])
-                if parent:
-                    items.append(parent)
-
-        for item in items:
-            event_link_tag = item.find("a", href=lambda x: x and "/event/" in x)
-            if not event_link_tag:
+            # Check country filter safely
+            if not is_target_country(country_raw, countries):
                 continue
 
-            event_url = f"https://www.last.fm{event_link_tag['href']}"
-            event_name = event_link_tag.get_text(strip=True)
+            event_date_str = event.get("datetime", "")
+            if not event_date_str:
+                continue
 
-            date_str = None
-            time_tag = item.find("time")
-            if time_tag and time_tag.get("datetime"):
-                date_str = time_tag["datetime"].split("T")[0]
-            else:
-                date_elem = item.find(class_=lambda x: x and "date" in x.lower())
-                if date_elem:
-                    date_str = date_elem.get_text(strip=True)
+            try:
+                event_date = datetime.fromisoformat(event_date_str.replace("Z", "+00:00")).date().isoformat()
+                if event_date < today_str:
+                    continue
+            except Exception:
+                continue
 
-            if not date_str:
-                date_str = datetime.now().date().isoformat()
+            ticket_url = None
+            offers = event.get("offers", [])
+            if offers and isinstance(offers, list):
+                ticket_url = offers[0].get("url")
 
-            venue = "Unknown Venue"
-            city = "Unknown City"
-            country = "Unknown Country"
+            # Standardized tour event dict
+            country_code = "ES" if is_target_country(country_raw, ["ES", "Spain", "España"]) else ("PT" if is_target_country(country_raw, ["PT", "Portugal", "Espanha"]) else country_raw.strip().upper())
 
-            venue_elem = item.find(class_=lambda x: x and ("venue" in x.lower() or "location" in x.lower()))
-            if venue_elem:
-                text_parts = [p.strip() for p in venue_elem.get_text(separator=",").split(",") if p.strip()]
-                if len(text_parts) > 0:
-                    venue = text_parts[0]
-                if len(text_parts) > 1:
-                    city = text_parts[1]
-                if len(text_parts) > 2:
-                    country = text_parts[-1]
-            else:
-                text_content = item.get_text(separator=",").replace("\n", ",")
-                parts = [p.strip() for p in text_content.split(",") if p.strip()]
-                if len(parts) > 2:
-                    venue = parts[1]
-                    city = parts[2]
-                    if len(parts) > 3:
-                        country = parts[-1]
+            tour_event = {
+                "band_name": band_name,
+                "venue": venue.get("name", "Unknown Venue"),
+                "city": city_raw,
+                "country": country_code,
+                "event_date": event_date,
+                "ticket_url": ticket_url,
+                "last_fm_url": ticket_url,  # Included for backward compatibility with app.py UI
+                "source": "bandsintown",
+                "scraped_at": datetime.now().isoformat()
+            }
+            filtered_events.append(tour_event)
 
-            events.append({
-                "event_name": event_name,
-                "city": city,
-                "venue": venue,
-                "event_date": date_str,
-                "ticket_url": event_url,
-                "country": country,
-                "source": "lastfm"
-            })
-
+        return filtered_events
     except Exception as e:
-        print(f"Error scraping Last.fm events for {artist_name}: {e}")
+        print(f"Bandsintown tour fetch failed for '{band_name}': {e}")
+        return []
 
-    return events
+def get_tours_songkick(band_name, countries=None):
+    """
+    Query Songkick API for upcoming tours of a band (requires SONGKICK_API_KEY).
+    Filters for target countries (default: Spain 'ES', Portugal 'PT') and future dates.
+    """
+    key = SONGKICK_API_KEY or os.environ.get("SONGKICK_API_KEY")
+    if not key:
+        return []
 
-def track_lastfm_concerts():
-    if not supabase:
-        return
-    print("--- Scraping Last.fm Events for All Bands (Phase 3 Spec) ---")
+    if countries is None:
+        countries = ['ES', 'PT', 'Spain', 'Portugal', 'España', 'Espanha']
+
+    today_str = datetime.now().date().isoformat()
+
     try:
-        # Union of band names from weekly_submissions and band_registry
+        # Step 1: Search artist ID
+        time.sleep(RATE_LIMIT_DELAY)
+        search_url = f"https://api.songkick.com/api/3.0/search/artists.json"
+        res = requests.get(search_url, params={"query": band_name, "apikey": key}, timeout=10)
+        if res.status_code != 200:
+            return []
+
+        search_data = res.json()
+        results = search_data.get("resultsPage", {}).get("results", {}).get("artist", [])
+        if not results:
+            return []
+
+        artist_id = results[0].get("id")
+        if not artist_id:
+            return []
+
+        # Step 2: Fetch calendar events
+        time.sleep(RATE_LIMIT_DELAY)
+        cal_url = f"https://api.songkick.com/api/3.0/artists/{artist_id}/calendar.json"
+        res_cal = requests.get(cal_url, params={"apikey": key}, timeout=10)
+        if res_cal.status_code != 200:
+            return []
+
+        events_data = res_cal.json().get("resultsPage", {}).get("results", {}).get("event", [])
+        if not isinstance(events_data, list):
+            return []
+
+        filtered_events = []
+        for event in events_data:
+            venue = event.get("venue", {})
+            location = event.get("location", {})
+            country_raw = location.get("country", "") or venue.get("metroArea", {}).get("country", {}).get("displayName", "")
+            city_raw = location.get("city", "") or venue.get("metroArea", {}).get("displayName", "Unknown")
+
+            if not is_target_country(country_raw, countries):
+                continue
+
+            event_date_str = event.get("start", {}).get("date", "")
+            if not event_date_str or event_date_str < today_str:
+                continue
+
+            ticket_url = event.get("uri")
+            country_code = "ES" if is_target_country(country_raw, ["ES", "Spain", "España"]) else ("PT" if is_target_country(country_raw, ["PT", "Portugal", "Espanha"]) else country_raw.strip().upper())
+
+            tour_event = {
+                "band_name": band_name,
+                "venue": venue.get("displayName", "Unknown Venue"),
+                "city": city_raw,
+                "country": country_code,
+                "event_date": event_date_str,
+                "ticket_url": ticket_url,
+                "last_fm_url": ticket_url,
+                "source": "songkick",
+                "scraped_at": datetime.now().isoformat()
+            }
+            filtered_events.append(tour_event)
+
+        return filtered_events
+    except Exception as e:
+        print(f"Songkick tour fetch failed for '{band_name}': {e}")
+        return []
+
+def deduplicate_tours(bandsintown_events, songkick_events):
+    """
+    Merge and deduplicate tour events from multiple sources by (venue, event_date).
+    Bandsintown events take priority over Songkick events.
+    """
+    merged = list(bandsintown_events)
+    seen_keys = {f"{e['venue'].lower().strip()}:{e['event_date']}" for e in bandsintown_events}
+
+    for sk_event in songkick_events:
+        key = f"{sk_event['venue'].lower().strip()}:{sk_event['event_date']}"
+        if key not in seen_keys:
+            seen_keys.add(key)
+            merged.append(sk_event)
+
+    merged.sort(key=lambda x: x["event_date"])
+    return merged
+
+def save_tour_events_to_supabase(band_name, tours, supabase_client=None):
+    """
+    Save list of tour events to Supabase tour_events table.
+    Uses UPSERT on unique constraint (band_name, venue, event_date).
+    """
+    client = supabase_client or supabase
+    if not tours or not client:
+        return 0
+
+    saved_count = 0
+    for tour in tours:
+        try:
+            client.table("tour_events").upsert(
+                tour, on_conflict="band_name,venue,event_date"
+            ).execute()
+            saved_count += 1
+        except Exception as e:
+            print(f"Save tour event error for '{band_name}': {e}")
+    return saved_count
+
+def track_tour_events():
+    """
+    Main tour scraping pipeline replacing Last.fm.
+    Scrapes Bandsintown and Songkick for all registered bands and upserts tour events to Supabase.
+    """
+    if not supabase:
+        print("Warning: Supabase client not initialized. Skipping tour event scraping.")
+        return
+
+    print("--- Scraping Bandsintown & Songkick Tour Events for All Bands ---")
+    try:
         band_names = set()
 
         try:
@@ -1130,7 +1253,6 @@ def track_lastfm_concerts():
         except Exception as br_e:
             print(f"Error reading band_registry for tour scraping: {br_e}")
 
-        # Also fall back to legacy artists table if present
         try:
             art_res = supabase.table("artists").select("name").eq("is_active", True).execute()
             if art_res.data:
@@ -1140,43 +1262,30 @@ def track_lastfm_concerts():
         except Exception as art_e:
             print(f"Error reading artists for tour scraping: {art_e}")
 
-        print(f"Found total of {len(band_names)} unique bands to check for tour events.")
-        today_str = datetime.now().date().isoformat()
+        sorted_bands = sorted(list(band_names))
+        print(f"Found total of {len(sorted_bands)} unique bands to check for tour events.")
 
-        for band in sorted(list(band_names)):
-            scraped_events = scrape_lastfm_artist_events(band)
-            valid_tours = []
+        total_events_found = 0
+        total_events_saved = 0
 
-            for event in scraped_events:
-                country = event.get("country", "")
-                event_date = event.get("event_date", "")
+        for idx, band in enumerate(sorted_bands, 1):
+            bt_tours = get_tours_bandsintown(band)
+            sk_tours = get_tours_songkick(band)
+            combined_tours = deduplicate_tours(bt_tours, sk_tours)
 
-                # Filter country in (Spain, Portugal) and event_date >= TODAY
-                if country.lower() in ["spain", "portugal", "españa", "espanha"] and event_date >= today_str:
-                    valid_tours.append({
-                        "band_name": band,
-                        "venue": event["venue"],
-                        "city": event["city"],
-                        "country": country,
-                        "event_date": event_date,
-                        "last_fm_url": event.get("ticket_url"),
-                        "source": "last.fm",
-                        "scraped_at": datetime.now().isoformat()
-                    })
+            if combined_tours:
+                saved = save_tour_events_to_supabase(band, combined_tours, supabase)
+                total_events_found += len(combined_tours)
+                total_events_saved += saved
+                print(f"✓ [{idx}/{len(sorted_bands)}] {band}: {len(combined_tours)} tours found, {saved} saved.")
 
-            if valid_tours:
-                print(f"Found {len(valid_tours)} upcoming tours in Spain/Portugal for '{band}'.")
-                for tour in valid_tours:
-                    try:
-                        supabase.table("tour_events").upsert(
-                            tour, on_conflict="band_name,venue,event_date"
-                        ).execute()
-                    except Exception as e:
-                        print(f"Error upserting tour_event {tour}: {e}")
-
-            time.sleep(random.uniform(1.0, 2.0))
+        print(f"Tour scraping complete. Found {total_events_found} events, saved {total_events_saved} events across {len(sorted_bands)} bands.")
     except Exception as e:
-        print(f"Error in tracking last.fm concerts: {e}")
+        print(f"Error in tour event scraping pipeline: {e}")
+
+# Backward compatibility alias
+track_lastfm_concerts = track_tour_events
+scrape_lastfm_artist_events = get_tours_bandsintown
 
 def check_instagram_tour_keywords(artist_name, instagram_url):
     if not instagram_url:
