@@ -6,3 +6,5 @@ streamlit.log
 node_modules/
 .streamlit/
 dist/
+test-results/
+playwright-report/
