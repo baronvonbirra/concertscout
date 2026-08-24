@@ -44,40 +44,85 @@ class TestScoutV2(unittest.TestCase):
         url = scout.resolve_instagram_via_search("HAWXX")
         self.assertEqual(url, "https://www.instagram.com/hawxxmusic/")
 
-    @patch('scout.robust_request')
-    def test_scrape_lastfm_artist_events(self, mock_robust_request):
+    @patch('scout.requests.get')
+    def test_get_tours_bandsintown(self, mock_get):
         mock_res = MagicMock()
         mock_res.status_code = 200
-        mock_res.text = """
-        <html>
-            <div class="events-list-item">
-                <a href="/event/12345">Gira 2026</a>
-                <time datetime="2026-10-15T20:00:00"></time>
-                <span class="venue-location">Wurlitzer Ballroom, Madrid, Spain</span>
-            </div>
-        </html>
-        """
-        mock_robust_request.return_value = mock_res
+        mock_res.json.return_value = [
+            {
+                "datetime": "2026-10-15T20:00:00",
+                "venue": {"name": "Wurlitzer Ballroom", "city": "Madrid", "country": "Spain"},
+                "offers": [{"url": "https://tickets.example.com/show"}]
+            },
+            {
+                "datetime": "2026-10-20T20:00:00",
+                "venue": {"name": "O2 Arena", "city": "London", "country": "United Kingdom"},
+                "offers": []
+            }
+        ]
+        mock_get.return_value = mock_res
 
-        events = scout.scrape_lastfm_artist_events("HAWXX")
+        events = scout.get_tours_bandsintown("HAWXX")
         self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["event_name"], "Gira 2026")
+        self.assertEqual(events[0]["band_name"], "HAWXX")
         self.assertEqual(events[0]["city"], "Madrid")
         self.assertEqual(events[0]["venue"], "Wurlitzer Ballroom")
         self.assertEqual(events[0]["event_date"], "2026-10-15")
+        self.assertEqual(events[0]["country"], "ES")
+        self.assertEqual(events[0]["ticket_url"], "https://tickets.example.com/show")
 
-    @patch('scout.robust_request')
-    def test_scrape_lastfm_artist_events_url_encoding(self, mock_robust_request):
-        mock_res = MagicMock()
-        mock_res.status_code = 200
-        mock_res.text = "<html></html>"
-        mock_robust_request.return_value = mock_res
+    @patch('scout.requests.get')
+    def test_get_tours_songkick(self, mock_get):
+        mock_search_res = MagicMock()
+        mock_search_res.status_code = 200
+        mock_search_res.json.return_value = {
+            "resultsPage": {
+                "results": {
+                    "artist": [{"id": 99999}]
+                }
+            }
+        }
 
-        scout.scrape_lastfm_artist_events("赤いくらげ")
+        mock_cal_res = MagicMock()
+        mock_cal_res.status_code = 200
+        mock_cal_res.json.return_value = {
+            "resultsPage": {
+                "results": {
+                    "event": [
+                        {
+                            "start": {"date": "2026-11-01"},
+                            "venue": {"displayName": "Razzmatazz"},
+                            "location": {"city": "Barcelona", "country": "Spain"},
+                            "uri": "https://songkick.example.com/event"
+                        }
+                    ]
+                }
+            }
+        }
 
-        self.assertTrue(mock_robust_request.called)
-        called_url = mock_robust_request.call_args[0][1]
-        self.assertEqual(called_url, "https://www.last.fm/music/%E8%B5%A4%E3%81%84%E3%81%8F%E3%82%89%E3%81%92/+events")
+        mock_get.side_effect = [mock_search_res, mock_cal_res]
+
+        with patch.dict('os.environ', {'SONGKICK_API_KEY': 'test_key'}):
+            events = scout.get_tours_songkick("HAWXX")
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["venue"], "Razzmatazz")
+            self.assertEqual(events[0]["city"], "Barcelona")
+            self.assertEqual(events[0]["event_date"], "2026-11-01")
+
+    def test_deduplicate_tours(self):
+        bt_events = [
+            {"venue": "Wurlitzer Ballroom", "event_date": "2026-10-15", "source": "bandsintown"},
+            {"venue": "Sala Apolo", "event_date": "2026-10-22", "source": "bandsintown"}
+        ]
+        sk_events = [
+            {"venue": "wurlitzer ballroom", "event_date": "2026-10-15", "source": "songkick"},
+            {"venue": "La Riviera", "event_date": "2026-11-05", "source": "songkick"}
+        ]
+
+        deduped = scout.deduplicate_tours(bt_events, sk_events)
+        self.assertEqual(len(deduped), 3)
+        self.assertEqual(deduped[0]["event_date"], "2026-10-15")
+        self.assertEqual(deduped[0]["source"], "bandsintown")
 
     @patch('scout.requests.get')
     def test_robust_request_circuit_breaker_threshold(self, mock_get):
@@ -180,10 +225,9 @@ class TestScoutV2(unittest.TestCase):
         self.assertIn("Old Band", selected_names)
 
     @patch('scout.supabase')
-    @patch('scout.scrape_lastfm_artist_events')
-    def test_track_lastfm_concerts_phase3(self, mock_scrape, mock_supabase):
+    @patch('scout.get_tours_bandsintown')
+    def test_track_tour_events_phase3(self, mock_get_bt, mock_supabase):
         # Mock database returns for band sources
-        mock_table = MagicMock()
         mock_execute_ws = MagicMock(data=[{"band_name": "Punk Act 1"}])
         mock_execute_br = MagicMock(data=[{"band_name": "Punk Act 2"}])
         mock_execute_art = MagicMock(data=[{"name": "Punk Act 3"}])
@@ -203,13 +247,13 @@ class TestScoutV2(unittest.TestCase):
         mock_supabase.table.side_effect = table_side_effect
 
         future_date = (datetime.now().date()).isoformat()
-        mock_scrape.return_value = [
-            {"event_name": "Gig", "city": "Madrid", "venue": "Wurlitzer", "event_date": future_date, "ticket_url": "http://last.fm/event", "country": "Spain"}
+        mock_get_bt.return_value = [
+            {"band_name": "Punk Act 1", "city": "Madrid", "venue": "Wurlitzer", "event_date": future_date, "ticket_url": "https://tickets.example.com/gig", "country": "ES", "source": "bandsintown"}
         ]
 
-        scout.track_lastfm_concerts()
+        scout.track_tour_events()
 
-        self.assertTrue(mock_scrape.called)
+        self.assertTrue(mock_get_bt.called)
 
     def test_calculate_momentum_score(self):
         # Multi-factor score test
