@@ -714,10 +714,13 @@ def main():
                         body: JSON.stringify(payload)
                     });
 
-                    if (!res.ok) throw new Error('Failed to submit');
+                    if (!res.ok) {
+                        const errData = await res.json().catch(() => ({}));
+                        throw new Error(errData.message || 'Failed to submit weekly submission');
+                    }
 
                     // Upsert into band_registry
-                    await fetch('__SUPABASE_URL__/rest/v1/band_registry', {
+                    const resBr = await fetch('__SUPABASE_URL__/rest/v1/band_registry?on_conflict=band_name', {
                         method: 'POST',
                         headers: {
                             'apikey': '__SUPABASE_KEY__',
@@ -730,6 +733,11 @@ def main():
                             last_used_in_playlist: this.subWeek
                         })
                     });
+
+                    if (!resBr.ok) {
+                        const errData = await resBr.json().catch(() => ({}));
+                        throw new Error(errData.message || 'Failed to update band registry');
+                    }
 
                     this.adminSuccess = true;
                     this.adminSubmitting = false;
@@ -796,6 +804,13 @@ def main():
                     return;
                 }
 
+                // Deduplicate bandRegistryItems by band_name keeping the last entry
+                const uniqueRegistryMap = new Map();
+                for (let item of bandRegistryItems) {
+                    uniqueRegistryMap.set(item.band_name.toLowerCase(), item);
+                }
+                const deduplicatedRegistryItems = Array.from(uniqueRegistryMap.values());
+
                 try {
                     const res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
                         method: 'POST',
@@ -807,10 +822,13 @@ def main():
                         body: JSON.stringify(items)
                     });
 
-                    if (!res.ok) throw new Error('Bulk insert failed');
+                    if (!res.ok) {
+                        const errData = await res.json().catch(() => ({}));
+                        throw new Error(errData.message || 'Bulk insert failed');
+                    }
 
                     // Upsert into band_registry
-                    await fetch('__SUPABASE_URL__/rest/v1/band_registry', {
+                    const resBr = await fetch('__SUPABASE_URL__/rest/v1/band_registry?on_conflict=band_name', {
                         method: 'POST',
                         headers: {
                             'apikey': '__SUPABASE_KEY__',
@@ -818,8 +836,13 @@ def main():
                             'Content-Type': 'application/json',
                             'Prefer': 'resolution=merge-duplicates'
                         },
-                        body: JSON.stringify(bandRegistryItems)
+                        body: JSON.stringify(deduplicatedRegistryItems)
                     });
+
+                    if (!resBr.ok) {
+                        const errData = await resBr.json().catch(() => ({}));
+                        throw new Error(errData.message || 'Bulk registry update failed');
+                    }
 
                     this.adminSuccess = true;
                     this.adminSubmitting = false;
