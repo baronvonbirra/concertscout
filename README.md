@@ -51,7 +51,12 @@ All backend automation workflows are verified and configured as automated GitHub
 ## 🔐 Security & Database Setup
 
 ### 1. Database Schema
-Execute the SQL in `schema.sql` inside your Supabase SQL Editor to set up the `artists` and `concerts` tables.
+Execute the SQL in `schema.sql` inside your Supabase SQL Editor to set up the database tables (including `weekly_submissions`, `artists`, `concerts`, `tour_events`, `band_registry`, etc.).
+
+If updating an existing database instance where `share_recommendation` column is missing from `weekly_submissions`, execute `add_share_recommendation_column.sql` in the Supabase SQL Editor and reload the PostgREST schema cache:
+```sql
+NOTIFY pgrst, 'reload schema';
+```
 
 ### 2. Row Level Security (RLS) & API Keys
 Because GitHub Pages is a public hosting service, the `SUPABASE_KEY` exposed to the frontend should be your project's **public anon key**.

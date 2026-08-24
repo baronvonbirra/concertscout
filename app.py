@@ -703,7 +703,7 @@ def main():
                 };
 
                 try {
-                    const res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
+                    let res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
                         method: 'POST',
                         headers: {
                             'apikey': '__SUPABASE_KEY__',
@@ -713,6 +713,25 @@ def main():
                         },
                         body: JSON.stringify(payload)
                     });
+
+                    if (!res.ok) {
+                        const errData = await res.json().catch(() => ({}));
+                        const errStr = JSON.stringify(errData);
+                        if (errStr.includes('share_recommendation')) {
+                            const fallbackPayload = { ...payload };
+                            delete fallbackPayload.share_recommendation;
+                            res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
+                                method: 'POST',
+                                headers: {
+                                    'apikey': '__SUPABASE_KEY__',
+                                    'Authorization': 'Bearer __SUPABASE_KEY__',
+                                    'Content-Type': 'application/json',
+                                    'Prefer': 'return=representation'
+                                },
+                                body: JSON.stringify(fallbackPayload)
+                            });
+                        }
+                    }
 
                     if (!res.ok) {
                         const errData = await res.json().catch(() => ({}));
@@ -812,7 +831,7 @@ def main():
                 const deduplicatedRegistryItems = Array.from(uniqueRegistryMap.values());
 
                 try {
-                    const res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
+                    let res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
                         method: 'POST',
                         headers: {
                             'apikey': '__SUPABASE_KEY__',
@@ -821,6 +840,27 @@ def main():
                         },
                         body: JSON.stringify(items)
                     });
+
+                    if (!res.ok) {
+                        const errData = await res.json().catch(() => ({}));
+                        const errStr = JSON.stringify(errData);
+                        if (errStr.includes('share_recommendation')) {
+                            const fallbackItems = items.map(item => {
+                                const copy = { ...item };
+                                delete copy.share_recommendation;
+                                return copy;
+                            });
+                            res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
+                                method: 'POST',
+                                headers: {
+                                    'apikey': '__SUPABASE_KEY__',
+                                    'Authorization': 'Bearer __SUPABASE_KEY__',
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify(fallbackItems)
+                            });
+                        }
+                    }
 
                     if (!res.ok) {
                         const errData = await res.json().catch(() => ({}));
