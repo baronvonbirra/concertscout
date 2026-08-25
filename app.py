@@ -642,26 +642,20 @@ def main():
             adminSuccess: false,
             adminTab: 'submissions',
             subWeek: 'W33',
-            subBandName: '',
+            subBands: [
+                { band_name: '', interaction_type: 'none' },
+                { band_name: '', interaction_type: 'none' },
+                { band_name: '', interaction_type: 'none' },
+                { band_name: '', interaction_type: 'none' },
+                { band_name: '', interaction_type: 'none' },
+                { band_name: '', interaction_type: 'none' }
+            ],
             subDirectViews: 0,
             subIndirectViews: 0,
             subTotalSaves: 0,
-            subInteractionType: 'none',
             subNotes: '',
             bulkCsv: '',
             bulkMode: false,
-
-            get currentScore() {
-                const type = this.subInteractionType;
-                if (type === 'liked+shared+thanked') return 3;
-                if (type === 'liked+shared') return 2;
-                if (['liked', 'shared', 'thanked'].includes(type)) return 1;
-                return 0;
-            },
-
-            get currentShared() {
-                return this.subInteractionType.includes('shared');
-            },
 
             verifyAdminPassword() {
                 if (this.adminPasswordInput.trim() === 'punk2026' || window.location.search.includes('pwd=punk2026')) {
@@ -679,28 +673,48 @@ def main():
                 return 0;
             },
 
-            async submitSingle() {
-                if (!this.subBandName.trim()) {
-                    alert('Band name is required!');
+            async submitBatch() {
+                const filledBands = this.subBands.filter(b => b.band_name && b.band_name.trim());
+                if (filledBands.length === 0) {
+                    alert('Please enter at least one band name!');
                     return;
                 }
                 this.adminSubmitting = true;
                 this.adminSuccess = false;
 
-                const decision = this.getBandShareDecision(this.subBandName);
+                const items = [];
+                const bandRegistryItems = [];
 
-                const payload = {
-                    week: this.subWeek,
-                    band_name: this.subBandName.trim(),
-                    direct_views: parseInt(this.subDirectViews) || 0,
-                    indirect_views: parseInt(this.subIndirectViews) || 0,
-                    total_saves: parseInt(this.subTotalSaves) || 0,
-                    interaction_type: this.subInteractionType,
-                    interaction_score: this.calcScore(this.subInteractionType),
-                    shared: this.subInteractionType.includes('shared'),
-                    share_recommendation: decision.recommendation,
-                    notes: this.subNotes || null
-                };
+                for (let b of filledBands) {
+                    const band_name = b.band_name.trim();
+                    const interaction_type = b.interaction_type || 'none';
+                    const decision = this.getBandShareDecision(band_name);
+
+                    items.push({
+                        week: this.subWeek,
+                        band_name: band_name,
+                        direct_views: parseInt(this.subDirectViews) || 0,
+                        indirect_views: parseInt(this.subIndirectViews) || 0,
+                        total_saves: parseInt(this.subTotalSaves) || 0,
+                        interaction_type: interaction_type,
+                        interaction_score: this.calcScore(interaction_type),
+                        shared: interaction_type.includes('shared'),
+                        share_recommendation: decision.recommendation,
+                        notes: this.subNotes || null
+                    });
+
+                    bandRegistryItems.push({
+                        band_name: band_name,
+                        last_used_in_playlist: this.subWeek
+                    });
+                }
+
+                // Deduplicate bandRegistryItems by band_name keeping the last entry
+                const uniqueRegistryMap = new Map();
+                for (let item of bandRegistryItems) {
+                    uniqueRegistryMap.set(item.band_name.toLowerCase(), item);
+                }
+                const deduplicatedRegistryItems = Array.from(uniqueRegistryMap.values());
 
                 try {
                     let res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
@@ -708,34 +722,35 @@ def main():
                         headers: {
                             'apikey': '__SUPABASE_KEY__',
                             'Authorization': 'Bearer __SUPABASE_KEY__',
-                            'Content-Type': 'application/json',
-                            'Prefer': 'return=representation'
+                            'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify(payload)
+                        body: JSON.stringify(items)
                     });
 
                     if (!res.ok) {
                         const errData = await res.json().catch(() => ({}));
                         const errStr = JSON.stringify(errData);
                         if (errStr.includes('share_recommendation')) {
-                            const fallbackPayload = { ...payload };
-                            delete fallbackPayload.share_recommendation;
+                            const fallbackItems = items.map(item => {
+                                const copy = { ...item };
+                                delete copy.share_recommendation;
+                                return copy;
+                            });
                             res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
                                 method: 'POST',
                                 headers: {
                                     'apikey': '__SUPABASE_KEY__',
                                     'Authorization': 'Bearer __SUPABASE_KEY__',
-                                    'Content-Type': 'application/json',
-                                    'Prefer': 'return=representation'
+                                    'Content-Type': 'application/json'
                                 },
-                                body: JSON.stringify(fallbackPayload)
+                                body: JSON.stringify(fallbackItems)
                             });
                         }
                     }
 
                     if (!res.ok) {
                         const errData = await res.json().catch(() => ({}));
-                        throw new Error(errData.message || 'Failed to submit weekly submission');
+                        throw new Error(errData.message || 'Failed to submit weekly submissions');
                     }
 
                     // Upsert into band_registry
@@ -747,10 +762,7 @@ def main():
                             'Content-Type': 'application/json',
                             'Prefer': 'resolution=merge-duplicates'
                         },
-                        body: JSON.stringify({
-                            band_name: this.subBandName.trim(),
-                            last_used_in_playlist: this.subWeek
-                        })
+                        body: JSON.stringify(deduplicatedRegistryItems)
                     });
 
                     if (!resBr.ok) {
@@ -760,7 +772,14 @@ def main():
 
                     this.adminSuccess = true;
                     this.adminSubmitting = false;
-                    this.subBandName = '';
+                    this.subBands = [
+                        { band_name: '', interaction_type: 'none' },
+                        { band_name: '', interaction_type: 'none' },
+                        { band_name: '', interaction_type: 'none' },
+                        { band_name: '', interaction_type: 'none' },
+                        { band_name: '', interaction_type: 'none' },
+                        { band_name: '', interaction_type: 'none' }
+                    ];
                     this.subDirectViews = 0;
                     this.subIndirectViews = 0;
                     this.subTotalSaves = 0;
@@ -1321,84 +1340,76 @@ def main():
                             <button @click="bulkMode = true" :class="bulkMode ? 'bg-[#CCFF00] text-black' : 'bg-black text-white'" class="px-6 py-2 bebas text-2xl border-4 border-black">BULK CSV IMPORT</button>
                         </div>
 
-                    <!-- Single Submission Form -->
+                    <!-- Weekly Batch Submission Form (6 Bands) -->
                     <div x-show="!bulkMode" class="brutal-card p-6 bg-white text-black">
-                        <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase">WEEKLY SUBMISSION FORM</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label class="block font-bold text-xs uppercase mb-1">WEEK (e.g. W33):</label>
-                                <input type="text" x-model="subWeek" class="w-full border-2 border-black p-2 mono text-sm">
-                            </div>
-                            <div>
-                                <label class="block font-bold text-xs uppercase mb-1">BAND NAME:</label>
-                                <input type="text" x-model="subBandName" class="w-full border-2 border-black p-2 mono text-sm">
-                            </div>
-                            <div>
-                                <label class="block font-bold text-xs uppercase mb-1">DIRECT VIEWS:</label>
-                                <input type="number" x-model="subDirectViews" class="w-full border-2 border-black p-2 mono text-sm">
-                            </div>
-                            <div>
-                                <label class="block font-bold text-xs uppercase mb-1">INDIRECT VIEWS:</label>
-                                <input type="number" x-model="subIndirectViews" class="w-full border-2 border-black p-2 mono text-sm">
-                            </div>
-                            <div>
-                                <label class="block font-bold text-xs uppercase mb-1">TOTAL SAVES:</label>
-                                <input type="number" x-model="subTotalSaves" class="w-full border-2 border-black p-2 mono text-sm">
-                            </div>
-                            <div>
-                                <label class="block font-bold text-xs uppercase mb-1">INTERACTION TYPE:</label>
-                                <select x-model="subInteractionType" class="w-full border-2 border-black p-2 mono text-sm font-bold">
-                                    <option value="none">none (Score: 0)</option>
-                                    <option value="liked">liked (Score: 1)</option>
-                                    <option value="shared">shared (Score: 1)</option>
-                                    <option value="liked+shared">liked+shared (Score: 2)</option>
-                                    <option value="thanked">thanked (Score: 1)</option>
-                                    <option value="liked+shared+thanked">liked+shared+thanked (Score: 3)</option>
-                                </select>
-                            </div>
-                            <div class="md:col-span-2">
-                                <label class="block font-bold text-xs uppercase mb-1">NOTES (OPTIONAL):</label>
-                                <input type="text" x-model="subNotes" placeholder="e.g. repeat/special case..." class="w-full border-2 border-black p-2 mono text-sm">
+                        <h3 class="bebas text-3xl mb-2 border-b-4 border-black pb-2 uppercase">WEEKLY BATCH SUBMISSION FORM (6 BANDS)</h3>
+                        <p class="mono text-xs text-gray-600 mb-6">Shared metrics (Week, Views, Saves, Notes) will be applied to all entered bands in this batch.</p>
+
+                        <!-- Shared Metrics Section -->
+                        <div class="p-4 border-4 border-black bg-gray-100 mb-6">
+                            <h4 class="bebas text-2xl mb-3 uppercase">1. SHARED WEEK METRICS</h4>
+                            <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                                <div>
+                                    <label class="block font-bold text-xs uppercase mb-1">WEEK (e.g. W33):</label>
+                                    <input type="text" x-model="subWeek" class="w-full border-2 border-black p-2 mono text-sm bg-white">
+                                </div>
+                                <div>
+                                    <label class="block font-bold text-xs uppercase mb-1">DIRECT VIEWS:</label>
+                                    <input type="number" x-model="subDirectViews" class="w-full border-2 border-black p-2 mono text-sm bg-white">
+                                </div>
+                                <div>
+                                    <label class="block font-bold text-xs uppercase mb-1">INDIRECT VIEWS:</label>
+                                    <input type="number" x-model="subIndirectViews" class="w-full border-2 border-black p-2 mono text-sm bg-white">
+                                </div>
+                                <div>
+                                    <label class="block font-bold text-xs uppercase mb-1">TOTAL SAVES:</label>
+                                    <input type="number" x-model="subTotalSaves" class="w-full border-2 border-black p-2 mono text-sm bg-white">
+                                </div>
+                                <div>
+                                    <label class="block font-bold text-xs uppercase mb-1">NOTES (OPTIONAL):</label>
+                                    <input type="text" x-model="subNotes" placeholder="e.g. repeat/special case..." class="w-full border-2 border-black p-2 mono text-sm bg-white">
+                                </div>
                             </div>
                         </div>
 
-                        <!-- Share Decision Framework Live Card Preview -->
-                        <div class="mt-4 p-4 border-4 border-black bg-yellow-50 space-y-3 mono text-xs shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                            <div class="flex justify-between items-center border-b-2 border-black pb-2">
-                                <span class="font-bold text-sm uppercase">🎯 SHARE DECISION RECOMMENDATION:</span>
-                                <span :class="getBandShareDecision(subBandName).badge_bg + ' ' + getBandShareDecision(subBandName).badge_text"
-                                      class="px-3 py-1 font-bold border border-black text-xs uppercase"
-                                      x-text="getBandShareDecision(subBandName).recommendation"></span>
-                            </div>
+                        <!-- 6 Bands Grid Section -->
+                        <div class="space-y-4">
+                            <h4 class="bebas text-2xl uppercase">2. ENTER BANDS &amp; INTERACTIONS (6 BANDS)</h4>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <template x-for="(band, index) in subBands" :key="index">
+                                    <div class="p-4 border-4 border-black bg-yellow-50 flex flex-col justify-between shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                                        <div class="flex justify-between items-center mb-2 pb-1 border-b-2 border-black">
+                                            <span class="bebas text-xl" x-text="'BAND #' + (index + 1)"></span>
+                                            <span :class="getBandShareDecision(band.band_name).badge_bg + ' ' + getBandShareDecision(band.band_name).badge_text"
+                                                  class="px-2 py-0.5 font-bold border border-black text-[10px] uppercase truncate max-w-[200px]"
+                                                  x-text="getBandShareDecision(band.band_name).recommendation"></span>
+                                        </div>
 
-                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-                                <div class="p-2 bg-white border border-black">
-                                    <p class="text-[10px] text-gray-500 uppercase font-bold">Featured</p>
-                                    <p class="bebas text-xl" x-text="getBandShareDecision(subBandName).appearances + 'x'"></p>
-                                </div>
-                                <div class="p-2 bg-white border border-black">
-                                    <p class="text-[10px] text-gray-500 uppercase font-bold">Shared</p>
-                                    <p class="bebas text-xl" x-text="getBandShareDecision(subBandName).times_shared + 'x'"></p>
-                                </div>
-                                <div class="p-2 bg-white border border-black">
-                                    <p class="text-[10px] text-gray-500 uppercase font-bold">Success Rate</p>
-                                    <p class="bebas text-xl text-green-700" x-text="getBandShareDecision(subBandName).success_rate_pct + '%'"></p>
-                                </div>
-                                <div class="p-2 bg-white border border-black">
-                                    <p class="text-[10px] text-gray-500 uppercase font-bold">Avg Score</p>
-                                    <p class="bebas text-xl text-purple-700" x-text="getBandShareDecision(subBandName).avg_interaction"></p>
-                                </div>
-                            </div>
-
-                            <div class="flex justify-between items-center text-xs pt-1 border-t border-black">
-                                <span>Score: <strong x-text="currentScore"></strong> &middot; Derived Shared: <strong x-text="currentShared ? 'YES' : 'NO'"></strong></span>
-                                <span class="font-bold text-gray-700" x-text="'Tier: ' + getBandShareDecision(subBandName).tier"></span>
+                                        <div class="space-y-3">
+                                            <div>
+                                                <label class="block font-bold text-[10px] uppercase mb-1">BAND NAME:</label>
+                                                <input type="text" x-model="band.band_name" placeholder="Enter band name..." class="w-full border-2 border-black p-2 mono text-xs bg-white">
+                                            </div>
+                                            <div>
+                                                <label class="block font-bold text-[10px] uppercase mb-1">INTERACTION TYPE:</label>
+                                                <select x-model="band.interaction_type" class="w-full border-2 border-black p-2 mono text-xs font-bold bg-white">
+                                                    <option value="none">none (Score: 0)</option>
+                                                    <option value="liked">liked (Score: 1)</option>
+                                                    <option value="shared">shared (Score: 1)</option>
+                                                    <option value="liked+shared">liked+shared (Score: 2)</option>
+                                                    <option value="thanked">thanked (Score: 1)</option>
+                                                    <option value="liked+shared+thanked">liked+shared+thanked (Score: 3)</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
                             </div>
                         </div>
 
-                        <button @click="submitSingle()" :disabled="adminSubmitting"
+                        <button @click="submitBatch()" :disabled="adminSubmitting"
                                 class="w-full bg-[#CCFF00] text-black font-bold border-4 border-black p-4 mt-6 text-xl bebas tracking-wider hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all uppercase">
-                            SAVE SUBMISSION
+                            SAVE ALL 6 BANDS SUBMISSION
                         </button>
                     </div>
 
