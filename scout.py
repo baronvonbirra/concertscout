@@ -633,7 +633,7 @@ def get_spotify_token():
             "client_id": SPOTIFY_CLIENT_ID,
             "client_secret": SPOTIFY_CLIENT_SECRET
         }
-        res = requests.post(url, data=data)
+        res = requests.post(url, data=data, timeout=10)
         res.raise_for_status()
         res_data = res.json()
         _spotify_token_cache["token"] = res_data["access_token"]
@@ -669,7 +669,7 @@ def ingest_weekly_punk():
     headers = {"Authorization": f"Bearer {token}"}
 
     try:
-        res = requests.get(url, headers=headers)
+        res = requests.get(url, headers=headers, timeout=10)
         res.raise_for_status()
         items = res.json().get("items", [])
 
@@ -744,7 +744,7 @@ def ingest_playlist_all(playlist_url_or_id):
     while True:
         params = {"limit": limit, "offset": offset}
         try:
-            res = requests.get(url, headers=headers, params=params)
+            res = requests.get(url, headers=headers, params=params, timeout=10)
             res.raise_for_status()
             res_data = res.json()
             items = res_data.get("items", [])
@@ -966,7 +966,7 @@ def resolve_instagram(artist_name, spotify_id=None):
             url = f"https://api.spotify.com/v1/artists/{spotify_id}"
             headers = {"Authorization": f"Bearer {token}"}
             try:
-                res = requests.get(url, headers=headers)
+                res = requests.get(url, headers=headers, timeout=10)
                 if res.status_code == 200:
                     data = res.json()
                     ext_urls = data.get("external_urls", {})
@@ -987,7 +987,7 @@ def resolve_instagram(artist_name, spotify_id=None):
     return None
 
 def enrich_artists_instagram():
-    if not supabase:
+    if not supabase or DDG_BLOCKED:
         return
     print("--- Running Instagram Page Resolver ---")
     try:
@@ -1001,6 +1001,9 @@ def enrich_artists_instagram():
         artists = res.data if res.data else []
         print(f"Found {len(artists)} active artists without Instagram URL (processing up to 10).")
         for artist in artists:
+            if DDG_BLOCKED:
+                print("DuckDuckGo circuit breaker activated. Stopping Instagram enrichment.")
+                break
             artist_id = artist["id"]
             artist_name = artist["name"]
             spotify_id = artist.get("spotify_id")
@@ -1042,7 +1045,7 @@ def get_tours_bandsintown(band_name, countries=None):
     if countries is None:
         countries = ['ES', 'PT', 'Spain', 'Portugal', 'España', 'Espanha']
 
-    app_id = BANDSINTOWN_API_KEY or os.environ.get("BANDSINTOWN_API_KEY") or "concertscout"
+    app_id = BANDSINTOWN_API_KEY or os.environ.get("BANDSINTOWN_API_KEY") or "js_concertscout"
     today_str = datetime.now().date().isoformat()
 
     try:
@@ -1323,7 +1326,7 @@ def check_instagram_tour_keywords(artist_name, instagram_url):
     return False, []
 
 def scan_instagram_enrichment():
-    if not supabase:
+    if not supabase or DDG_BLOCKED:
         return
     print("--- Scanning Instagram for Tour Keywords ---")
     try:
@@ -1344,6 +1347,9 @@ def scan_instagram_enrichment():
         print(f"Scanning up to 10 random active artists without existing concerts (out of {len(artists_to_scan)} candidates)...")
 
         for artist in selected_artists:
+            if DDG_BLOCKED:
+                print("DuckDuckGo circuit breaker activated. Stopping Instagram keyword scan.")
+                break
             instagram_url = artist.get("instagram_url")
             if instagram_url:
                 is_flagged, matched = check_instagram_tour_keywords(artist["name"], instagram_url)
