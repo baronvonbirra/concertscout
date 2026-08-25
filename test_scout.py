@@ -71,6 +71,10 @@ class TestScoutV2(unittest.TestCase):
         self.assertEqual(events[0]["country"], "ES")
         self.assertEqual(events[0]["ticket_url"], "https://tickets.example.com/show")
 
+        # Verify fallback app_id parameter passed to requests.get when BANDSINTOWN_API_KEY is not set
+        params_passed = mock_get.call_args[1].get('params', {})
+        self.assertEqual(params_passed.get('app_id'), "js_concertscout")
+
     @patch('scout.requests.get')
     def test_get_tours_songkick(self, mock_get):
         mock_search_res = MagicMock()
@@ -176,6 +180,34 @@ class TestScoutV2(unittest.TestCase):
         self.assertTrue(flagged)
         self.assertIn("spain", words)
         self.assertIn("madrid", words)
+
+    @patch('scout.supabase')
+    @patch('scout.resolve_instagram')
+    def test_enrich_artists_instagram_circuit_breaker(self, mock_resolve, mock_supabase):
+        scout.DDG_BLOCKED = True
+        mock_table = MagicMock()
+        mock_supabase.table.return_value = mock_table
+
+        scout.enrich_artists_instagram()
+
+        # Should return immediately without querying Supabase or resolving Instagram when DDG_BLOCKED is True
+        self.assertFalse(mock_supabase.table.called)
+        self.assertFalse(mock_resolve.called)
+        scout.DDG_BLOCKED = False
+
+    @patch('scout.supabase')
+    @patch('scout.check_instagram_tour_keywords')
+    def test_scan_instagram_enrichment_circuit_breaker(self, mock_check, mock_supabase):
+        scout.DDG_BLOCKED = True
+        mock_table = MagicMock()
+        mock_supabase.table.return_value = mock_table
+
+        scout.scan_instagram_enrichment()
+
+        # Should return immediately without querying Supabase or checking keywords when DDG_BLOCKED is True
+        self.assertFalse(mock_supabase.table.called)
+        self.assertFalse(mock_check.called)
+        scout.DDG_BLOCKED = False
 
     @patch('scout.supabase')
     def test_sweep_past_concerts(self, mock_supabase):

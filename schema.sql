@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS tour_events (
     city VARCHAR NOT NULL,
     country VARCHAR NOT NULL,
     event_date DATE NOT NULL,
+    ticket_url VARCHAR,
     last_fm_url VARCHAR,
     source VARCHAR DEFAULT 'last.fm',
     scraped_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
