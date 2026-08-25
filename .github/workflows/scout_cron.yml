@@ -26,6 +26,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          BANDSINTOWN_API_KEY: ${{ secrets.BANDSINTOWN_API_KEY }}
+          SONGKICK_API_KEY: ${{ secrets.SONGKICK_API_KEY }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
