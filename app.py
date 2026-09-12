@@ -217,10 +217,12 @@ def fetch_consolidated_data():
         return {"concerts": [], "artists": [], "weekly_playlist": [], "tour_events": [], "weekly_submissions": [], "analytics_summary": [], "listener_snapshots": []}
 
     try:
+        today_str = datetime.now().date().isoformat()
+
         # Fetch tour_events for Phase 3 display
         tour_events = []
         try:
-            te_res = supabase.table("tour_events").select("*").order("event_date", desc=False).execute()
+            te_res = supabase.table("tour_events").select("*").gte("event_date", today_str).order("event_date", desc=False).execute()
             tour_events = te_res.data if te_res.data else []
         except Exception as te_e:
             print(f"Error fetching tour_events: {te_e}")
@@ -250,7 +252,7 @@ def fetch_consolidated_data():
             print(f"Error fetching band_listener_snapshot: {snap_e}")
 
         # Fetch concerts joined with artist details
-        res = supabase.table("concerts").select("*, artists(id, name, spotify_id, instagram_url, lastfm_url, source_playlist, is_active, last_instagram_post_id)").execute()
+        res = supabase.table("concerts").select("*, artists(id, name, spotify_id, instagram_url, lastfm_url, source_playlist, is_active, last_instagram_post_id)").gte("event_date", today_str).execute()
         concerts_list = res.data if res.data else []
 
         consolidated = []

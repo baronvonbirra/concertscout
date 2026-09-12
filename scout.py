@@ -1265,6 +1265,33 @@ def track_tour_events():
         except Exception as art_e:
             print(f"Error reading artists for tour scraping: {art_e}")
 
+        try:
+            ph_res = supabase.table("playlist_history").select("artist_name").execute()
+            if ph_res.data:
+                for r in ph_res.data:
+                    if r.get("artist_name"):
+                        band_names.add(r["artist_name"].strip())
+        except Exception as ph_e:
+            print(f"Error reading playlist_history for tour scraping: {ph_e}")
+
+        try:
+            bas_res = supabase.table("band_analytics_summary").select("band_name").execute()
+            if bas_res.data:
+                for r in bas_res.data:
+                    if r.get("band_name"):
+                        band_names.add(r["band_name"].strip())
+        except Exception as bas_e:
+            print(f"Error reading band_analytics_summary for tour scraping: {bas_e}")
+
+        try:
+            bls_res = supabase.table("band_listener_snapshot").select("band_name").execute()
+            if bls_res.data:
+                for r in bls_res.data:
+                    if r.get("band_name"):
+                        band_names.add(r["band_name"].strip())
+        except Exception as bls_e:
+            print(f"Error reading band_listener_snapshot for tour scraping: {bls_e}")
+
         sorted_bands = sorted(list(band_names))
         print(f"Found total of {len(sorted_bands)} unique bands to check for tour events.")
 
@@ -1370,6 +1397,10 @@ def sweep_past_concerts():
         res = supabase.table("concerts").delete().lt("event_date", today).execute()
         deleted_count = len(res.data) if res.data else 0
         print(f"Successfully deleted {deleted_count} stale concerts older than {today}.")
+
+        te_res = supabase.table("tour_events").delete().lt("event_date", today).execute()
+        te_deleted_count = len(te_res.data) if te_res.data else 0
+        print(f"Successfully deleted {te_deleted_count} stale tour_events older than {today}.")
     except Exception as e:
         print(f"Error sweeping past concerts: {e}")
 
@@ -1952,9 +1983,11 @@ def main():
         run_enrichment_pipeline()
     elif args.monday_playlist:
         generate_monday_playlist()
+        track_tour_events()
     elif args.analytics:
         take_band_listener_snapshots()
         recalculate_analytics_summary()
+        track_tour_events()
     else:
         # Default runs the full enrichment pipeline for existing active bands
         run_enrichment_pipeline()
