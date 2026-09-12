@@ -211,20 +211,23 @@ class TestScoutV2(unittest.TestCase):
 
     @patch('scout.supabase')
     def test_sweep_past_concerts(self, mock_supabase):
-        mock_delete = MagicMock()
-        mock_lt = MagicMock()
-        mock_execute = MagicMock()
+        mock_delete_concerts = MagicMock()
+        mock_delete_tours = MagicMock()
 
-        mock_supabase.table.return_value = mock_delete
-        mock_delete.delete.return_value = mock_lt
-        mock_lt.lt.return_value = mock_execute
-        mock_execute.execute.return_value = MagicMock(data=[{"id": 1}, {"id": 2}])
+        def table_side_effect(name):
+            m = MagicMock()
+            if name == "concerts":
+                m.delete.return_value.lt.return_value.execute.return_value = MagicMock(data=[{"id": 1}, {"id": 2}])
+            elif name == "tour_events":
+                m.delete.return_value.lt.return_value.execute.return_value = MagicMock(data=[{"id": 101}])
+            return m
+
+        mock_supabase.table.side_effect = table_side_effect
 
         scout.sweep_past_concerts()
 
-        mock_supabase.table.assert_called_once_with("concerts")
-        mock_delete.delete.assert_called_once()
-        mock_lt.lt.assert_called_once()
+        mock_supabase.table.assert_any_call("concerts")
+        mock_supabase.table.assert_any_call("tour_events")
 
     @patch('scout.supabase')
     def test_select_weekly_playlist_tracks_phase2_rules(self, mock_supabase):
@@ -259,10 +262,24 @@ class TestScoutV2(unittest.TestCase):
     @patch('scout.supabase')
     @patch('scout.get_tours_bandsintown')
     def test_track_tour_events_phase3(self, mock_get_bt, mock_supabase):
-        # Mock database returns for band sources
+        # Mock database returns for band sources across all DB tables
         mock_execute_ws = MagicMock(data=[{"band_name": "Punk Act 1"}])
         mock_execute_br = MagicMock(data=[{"band_name": "Punk Act 2"}])
         mock_execute_art = MagicMock(data=[{"name": "Punk Act 3"}])
+        mock_execute_ph = MagicMock(data=[{"artist_name": "Punk Act 4"}])
+        mock_execute_bas = MagicMock(data=[{"band_name": "Punk Act 5"}])
+        mock_execute_bls = MagicMock(data=[{"band_name": "Punk Act 6"}])
+
+        queried_bands = []
+
+        def mock_get_tours(band):
+            queried_bands.append(band)
+            future_date = (datetime.now().date()).isoformat()
+            return [
+                {"band_name": band, "city": "Madrid", "venue": "Wurlitzer", "event_date": future_date, "ticket_url": "https://tickets.example.com/gig", "country": "ES", "source": "bandsintown"}
+            ]
+
+        mock_get_bt.side_effect = mock_get_tours
 
         def table_side_effect(name):
             m = MagicMock()
@@ -271,21 +288,25 @@ class TestScoutV2(unittest.TestCase):
             elif name == "band_registry":
                 m.select.return_value.execute.return_value = mock_execute_br
             elif name == "artists":
-                m.select.return_value.execute.return_value = mock_execute_art
+                m.select.return_value.eq.return_value.execute.return_value = mock_execute_art
+            elif name == "playlist_history":
+                m.select.return_value.execute.return_value = mock_execute_ph
+            elif name == "band_analytics_summary":
+                m.select.return_value.execute.return_value = mock_execute_bas
+            elif name == "band_listener_snapshot":
+                m.select.return_value.execute.return_value = mock_execute_bls
             elif name == "tour_events":
                 m.upsert.return_value.execute.return_value = MagicMock()
             return m
 
         mock_supabase.table.side_effect = table_side_effect
 
-        future_date = (datetime.now().date()).isoformat()
-        mock_get_bt.return_value = [
-            {"band_name": "Punk Act 1", "city": "Madrid", "venue": "Wurlitzer", "event_date": future_date, "ticket_url": "https://tickets.example.com/gig", "country": "ES", "source": "bandsintown"}
-        ]
-
         scout.track_tour_events()
 
         self.assertTrue(mock_get_bt.called)
+        self.assertEqual(len(queried_bands), 6)
+        for act in ["Punk Act 1", "Punk Act 2", "Punk Act 3", "Punk Act 4", "Punk Act 5", "Punk Act 6"]:
+            self.assertIn(act, queried_bands)
 
     def test_calculate_momentum_score(self):
         # Multi-factor score test
