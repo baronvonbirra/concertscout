@@ -16,7 +16,7 @@ Automated tracking of live music tours in Spain and Portugal for a curated artis
 All backend automation workflows are verified and configured as automated GitHub Actions cron jobs:
 
 1. **Monday Playlist Curation (`scout_monday_playlist.yml`)**
-   - **Cron Schedule**: `0 7 * * 1` (Mondays at 07:00 UTC)
+   - **Cron Schedule**: `0 6 * * 1` (Mondays at 06:00 UTC)
    - **Command**: `python scout.py --monday-playlist`
    - **Description**: Selects exactly 10 fresh tracks meeting strict tier distribution & frequency cap rules for 'Punk in Progress', prunes tracks older than 84 days, and syncs discovered acts to the Tour Tracker DB.
 
