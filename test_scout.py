@@ -260,6 +260,43 @@ class TestScoutV2(unittest.TestCase):
         self.assertIn("Old Band", selected_names)
 
     @patch('scout.supabase')
+    def test_select_weekly_playlist_tracks_duplicate_track_exclusion(self, mock_supabase):
+        def table_side_effect(name):
+            m = MagicMock()
+            if name == "band_registry":
+                m.select.return_value.execute.return_value = MagicMock(data=[])
+            elif name == "playlist_history":
+                m.select.return_value.execute.return_value = MagicMock(data=[
+                    {"track_id": "hist_t1", "track_name": "History Song", "artist_name": "History Band"}
+                ])
+            return m
+
+        mock_supabase.table.side_effect = table_side_effect
+
+        existing_playlist_tracks = {"active_t2"}
+        existing_playlist_keys = {("active band", "active song")}
+
+        candidates = [
+            {"track_id": "hist_t1", "track_name": "History Song", "artist_id": "a1", "artist_name": "History Band", "monthly_listeners": 5000, "release_date": "2026-02-01"},
+            {"track_id": "active_t2", "track_name": "Different Title", "artist_id": "a2", "artist_name": "Band 2", "monthly_listeners": 6000, "release_date": "2026-02-01"},
+            {"track_id": "t3", "track_name": "Active Song", "artist_id": "a3", "artist_name": "Active Band", "monthly_listeners": 7000, "release_date": "2026-02-01"},
+            {"track_id": "fresh_t4", "track_name": "Fresh Song", "artist_id": "a4", "artist_name": "Fresh Band", "monthly_listeners": 8000, "release_date": "2026-02-01"},
+        ]
+
+        selected = scout.select_weekly_playlist_tracks(
+            candidates,
+            existing_playlist_tracks=existing_playlist_tracks,
+            existing_playlist_keys=existing_playlist_keys,
+            current_week="W33"
+        )
+
+        selected_ids = [s["track_id"] for s in selected]
+        self.assertNotIn("hist_t1", selected_ids)
+        self.assertNotIn("active_t2", selected_ids)
+        self.assertNotIn("t3", selected_ids)
+        self.assertIn("fresh_t4", selected_ids)
+
+    @patch('scout.supabase')
     @patch('scout.get_tours_bandsintown')
     def test_track_tour_events_phase3(self, mock_get_bt, mock_supabase):
         # Mock database returns for band sources across all DB tables

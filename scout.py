@@ -339,7 +339,7 @@ def sample_unique_artists(candidates_list, count, unavailable_artists):
 
     return selected_tracks
 
-def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, current_week=None):
+def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, existing_playlist_tracks=None, existing_playlist_keys=None, current_week=None):
     if not current_week:
         current_week = f"W{datetime.now().isocalendar()[1]}"
     print(f"--- Selecting Tracks for Weekly Discovery Playlist ({current_week} Phase 2 Spec) ---")
@@ -347,7 +347,10 @@ def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, cu
         print("Warning: No candidates found.")
         return []
 
-    # Get band registry data and top50 set from Supabase
+    excluded_track_ids = set(existing_playlist_tracks) if existing_playlist_tracks else set()
+    excluded_track_keys = set(existing_playlist_keys) if existing_playlist_keys else set()
+
+    # Get band registry data, top50 set, and playlist_history from Supabase
     band_registry_map = {}
     top50_bands = set()
 
@@ -361,6 +364,20 @@ def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, cu
                         top50_bands.add(row["band_name"].lower())
         except Exception as e:
             print(f"Error querying band_registry: {e}")
+
+        try:
+            ph_res = supabase.table("playlist_history").select("track_id, track_name, artist_name").execute()
+            if ph_res.data:
+                for row in ph_res.data:
+                    t_id = row.get("track_id")
+                    a_name = row.get("artist_name")
+                    t_name = row.get("track_name")
+                    if t_id:
+                        excluded_track_ids.add(t_id)
+                    if a_name and t_name:
+                        excluded_track_keys.add((a_name.lower(), t_name.lower()))
+        except Exception as e:
+            print(f"Error querying playlist_history for duplicate track exclusion: {e}")
 
     # Helper to parse week string (e.g., "W33" -> 33)
     def parse_week_num(w_str):
@@ -404,6 +421,13 @@ def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, cu
             b_name = c["artist_name"]
             b_lower = b_name.lower()
             a_id = c.get("artist_id")
+            t_id = c.get("track_id")
+            t_name = c.get("track_name", "")
+            t_key = (b_lower, t_name.lower())
+
+            # Skip duplicate tracks previously included or currently on playlist
+            if (t_id and t_id in excluded_track_ids) or t_key in excluded_track_keys:
+                continue
 
             if a_id and a_id in active_playlist_artists:
                 continue
@@ -427,6 +451,14 @@ def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, cu
                 break
             b_name = c["artist_name"]
             b_lower = b_name.lower()
+            t_id = c.get("track_id")
+            t_name = c.get("track_name", "")
+            t_key = (b_lower, t_name.lower())
+
+            # NEVER allow duplicate tracks even in padding fallback
+            if (t_id and t_id in excluded_track_ids) or t_key in excluded_track_keys:
+                continue
+
             if b_lower in seen_bands:
                 continue
             seen_bands.add(b_lower)
@@ -468,39 +500,54 @@ def generate_monday_playlist():
     playlist_id = "2ZqhNVOPmA3Nf0SRpzJ9Yz"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    # 2. Playlist Pruning check & gather active artists already in playlist upfront
-    print("Checking playlist tracks for pruning (>84 days old) and current artists...")
+    # 2. Playlist Pruning check & gather active artists & tracks already in playlist upfront
+    print("Checking playlist tracks for pruning (>84 days old), current artists, and existing tracks...")
     tracks_to_prune = []
     existing_playlist_artists = set()
+    existing_playlist_tracks = set()
+    existing_playlist_keys = set()
     try:
         url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
-        time.sleep(0.5)
-        res = requests.get(url, headers=headers, params={"limit": 100}, timeout=10)
-        if res.status_code == 200:
-            items = res.json().get("items", [])
-            cutoff_date = datetime.now() - timedelta(days=84)
-            for item in items:
-                added_at_str = item.get("added_at")
-                track = item.get("track")
-                if added_at_str and track:
-                    track_uri = track.get("uri")
-                    # parse added_at, format: "2015-01-15T12:34:56Z"
-                    try:
-                        added_at = datetime.strptime(added_at_str[:19], "%Y-%m-%dT%H:%M:%S")
-                        if added_at < cutoff_date:
-                            print(f"Pruning: Track '{track.get('name')}' by '{track.get('artists')[0].get('name') if track.get('artists') else 'Unknown'}' is older than 84 days (Added: {added_at_str}).")
-                            tracks_to_prune.append({"uri": track_uri})
-                        else:
-                            # Keep track of active artists already in the playlist
-                            artists = track.get("artists", [])
-                            if artists:
-                                primary_artist_id = artists[0].get("id")
-                                if primary_artist_id:
-                                    existing_playlist_artists.add(primary_artist_id)
-                    except Exception as pe:
-                        print(f"Error parsing added_at date '{added_at_str}': {pe}")
-        else:
-            print(f"Warning: Could not fetch playlist items for pruning/artist tracking. Status: {res.status_code}")
+        params = {"limit": 100}
+        cutoff_date = datetime.now() - timedelta(days=84)
+        while url:
+            time.sleep(0.5)
+            res = requests.get(url, headers=headers, params=params if "?" not in url else None, timeout=10)
+            if res.status_code == 200:
+                res_data = res.json()
+                items = res_data.get("items", [])
+                for item in items:
+                    added_at_str = item.get("added_at")
+                    track = item.get("track")
+                    if track:
+                        track_id = track.get("id")
+                        track_name = track.get("name", "")
+                        track_uri = track.get("uri")
+                        artists = track.get("artists", [])
+                        primary_artist_name = artists[0].get("name", "") if artists else ""
+
+                        if track_id:
+                            existing_playlist_tracks.add(track_id)
+                        if primary_artist_name and track_name:
+                            existing_playlist_keys.add((primary_artist_name.lower(), track_name.lower()))
+
+                        if added_at_str and track_uri:
+                            try:
+                                added_at = datetime.strptime(added_at_str[:19], "%Y-%m-%dT%H:%M:%S")
+                                if added_at < cutoff_date:
+                                    print(f"Pruning: Track '{track_name}' by '{primary_artist_name or 'Unknown'}' is older than 84 days (Added: {added_at_str}).")
+                                    tracks_to_prune.append({"uri": track_uri})
+                                else:
+                                    if artists:
+                                        primary_artist_id = artists[0].get("id")
+                                        if primary_artist_id:
+                                            existing_playlist_artists.add(primary_artist_id)
+                            except Exception as pe:
+                                print(f"Error parsing added_at date '{added_at_str}': {pe}")
+                url = res_data.get("next")
+            else:
+                print(f"Warning: Could not fetch playlist items for pruning/artist tracking. Status: {res.status_code}")
+                break
     except Exception as e:
         print(f"Error during playlist pruning check: {e}")
 
@@ -512,7 +559,12 @@ def generate_monday_playlist():
     for w_days in window_tiers:
         try:
             candidates = discover_punk_candidates(token, window_days=w_days, existing_candidates=candidates)
-            selected = select_weekly_playlist_tracks(candidates, existing_playlist_artists=existing_playlist_artists)
+            selected = select_weekly_playlist_tracks(
+                candidates,
+                existing_playlist_artists=existing_playlist_artists,
+                existing_playlist_tracks=existing_playlist_tracks,
+                existing_playlist_keys=existing_playlist_keys
+            )
             if len(selected) >= 10:
                 print(f"Successfully selected {len(selected)} tracks at release window past {w_days} days!")
                 break
