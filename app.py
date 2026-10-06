@@ -230,7 +230,7 @@ def fetch_consolidated_data():
         # Fetch weekly submissions for Phase 1 display
         weekly_submissions = []
         try:
-            ws_res = supabase.table("weekly_submissions").select("*").order("created_at", desc=True).execute()
+            ws_res = supabase.table("weekly_submissions").select("*").order("created_at", desc=True).limit(5000).execute()
             weekly_submissions = ws_res.data if ws_res.data else []
         except Exception as ws_e:
             print(f"Error fetching weekly_submissions: {ws_e}")
@@ -238,7 +238,7 @@ def fetch_consolidated_data():
         # Fetch analytics summary for Analytics Dashboard
         analytics_summary = []
         try:
-            ans_res = supabase.table("band_analytics_summary").select("*").order("momentum_score", desc=True).execute()
+            ans_res = supabase.table("band_analytics_summary").select("*").order("momentum_score", desc=True).limit(5000).execute()
             analytics_summary = ans_res.data if ans_res.data else []
         except Exception as ans_e:
             print(f"Error fetching band_analytics_summary: {ans_e}")
@@ -246,7 +246,7 @@ def fetch_consolidated_data():
         # Fetch listener snapshots for details modal
         listener_snapshots = []
         try:
-            snap_res = supabase.table("band_listener_snapshot").select("*").order("recorded_date", desc=True).limit(1000).execute()
+            snap_res = supabase.table("band_listener_snapshot").select("*").order("recorded_date", desc=True).limit(5000).execute()
             listener_snapshots = snap_res.data if snap_res.data else []
         except Exception as snap_e:
             print(f"Error fetching band_listener_snapshot: {snap_e}")
@@ -643,7 +643,7 @@ def main():
             adminSubmitting: false,
             adminSuccess: false,
             adminTab: 'submissions',
-            subWeek: 'W33',
+            subWeek: (function() { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7); const w1 = new Date(d.getFullYear(), 0, 4); return 'W' + (1 + Math.round(((d.getTime() - w1.getTime()) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7)); })(),
             subBands: [
                 { band_name: '', interaction_type: 'none' },
                 { band_name: '', interaction_type: 'none' },

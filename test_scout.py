@@ -435,8 +435,10 @@ class TestScoutV2(unittest.TestCase):
             m = MagicMock()
             if name == "weekly_submissions":
                 m.select.return_value.execute.return_value = mock_ws_exec
+                m.select.return_value.range.return_value.execute.return_value = mock_ws_exec
             elif name == "playlist_history":
                 m.select.return_value.execute.return_value = mock_ph_exec
+                m.select.return_value.range.return_value.execute.return_value = mock_ph_exec
             elif name == "band_listener_snapshot":
                 m.select.return_value.range.return_value.order.return_value.execute.return_value = mock_snap_exec
             elif name == "band_analytics_summary":
@@ -485,8 +487,10 @@ class TestScoutV2(unittest.TestCase):
             m = MagicMock()
             if name == "weekly_submissions":
                 m.select.return_value.execute.return_value = mock_ws_exec
+                m.select.return_value.range.return_value.execute.return_value = mock_ws_exec
             elif name == "playlist_history":
                 m.select.return_value.execute.return_value = mock_ph_exec
+                m.select.return_value.range.return_value.execute.return_value = mock_ph_exec
             elif name == "band_listener_snapshot":
                 m.select.return_value.range.return_value.order.return_value.execute.return_value = mock_snap_exec
             elif name == "band_analytics_summary":
@@ -662,6 +666,51 @@ class TestScoutV2(unittest.TestCase):
         self.assertEqual(mock_discover.call_count, 2)
         mock_discover.assert_any_call("mock_write_token", window_days=7, existing_candidates=[])
         mock_discover.assert_any_call("mock_write_token", window_days=14, existing_candidates=candidates_7d)
+
+    def test_clamp_pct(self):
+        self.assertEqual(scout.clamp_pct(1500.0), 999.99)
+        self.assertEqual(scout.clamp_pct(-2000.5), -999.99)
+        self.assertEqual(scout.clamp_pct(45.25), 45.25)
+        self.assertEqual(scout.clamp_pct(0), 0.0)
+        self.assertEqual(scout.clamp_pct(None), 0.0)
+        self.assertEqual(scout.clamp_pct("invalid"), 0.0)
+
+    @patch('scout.supabase')
+    def test_recalculate_analytics_summary_numeric_overflow_clamping(self, mock_supabase):
+        mock_ws_exec = MagicMock(data=[])
+        mock_ph_exec = MagicMock(data=[])
+        # Massive growth: 1 -> 100000 = 9999900% growth
+        mock_snap_exec = MagicMock(data=[
+            {"band_name": "Rocket Band", "listener_count": 1, "snapshot_week": "W1", "recorded_date": "2026-01-01"},
+            {"band_name": "Rocket Band", "listener_count": 100000, "snapshot_week": "W2", "recorded_date": "2026-01-08"}
+        ])
+
+        upserted_records = []
+
+        def table_side_effect(name):
+            m = MagicMock()
+            if name == "weekly_submissions":
+                m.select.return_value.execute.return_value = mock_ws_exec
+                m.select.return_value.range.return_value.execute.return_value = mock_ws_exec
+            elif name == "playlist_history":
+                m.select.return_value.execute.return_value = mock_ph_exec
+                m.select.return_value.range.return_value.execute.return_value = mock_ph_exec
+            elif name == "band_listener_snapshot":
+                m.select.return_value.range.return_value.order.return_value.execute.return_value = mock_snap_exec
+            elif name == "band_analytics_summary":
+                def mock_upsert(record, on_conflict=None):
+                    upserted_records.append(record)
+                    return MagicMock()
+                m.upsert.side_effect = mock_upsert
+            return m
+
+        mock_supabase.table.side_effect = table_side_effect
+
+        scout.recalculate_analytics_summary()
+        self.assertEqual(len(upserted_records), 1)
+        # Verify clamped to 999.99 to prevent PostgreSQL 22003 numeric field overflow
+        self.assertEqual(upserted_records[0]["week_over_week_growth_pct"], 999.99)
+        self.assertEqual(upserted_records[0]["total_growth_since_first_snapshot"], 999.99)
 
 if __name__ == '__main__':
     unittest.main()
