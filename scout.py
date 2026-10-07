@@ -12,6 +12,7 @@ import sys
 import re
 import base64
 import urllib.parse
+import math
 
 load_dotenv()
 
@@ -51,6 +52,136 @@ BOT_USER_AGENTS = [
 
 RATE_LIMIT_DELAY = 0.5
 
+# Quality Overhaul Configuration Constants
+ALLOW_UNVERIFIED_MAX = 0
+SUBGENRE_CAP = 2
+LISTENER_SWEET_SPOT = (2000, 100000)
+POOL_TOP_N = 40
+MIN_PLAYLIST_SIZE_ALERT = 6
+SCORE_WEIGHTS = {
+    "listener_sweet_spot": 30.0,
+    "genre_strength": 20.0,
+    "taste_overlap": 25.0,
+    "recency": 15.0,
+    "iberia_bonus": 10.0
+}
+
+GENRE_DENY = [
+    "electronic", "edm", "techno", "house", "deep house", "tech house", "trance",
+    "dubstep", "drum and bass", "hardstyle", "rave", "dj", "big room", "electro",
+    "synthwave", "lo-fi", "lofi beats", "phonk", "reggaeton", "trap", "hip hop",
+    "rap", "pop", "dance pop", "happy hardcore", "uk hardcore", "hardcore techno"
+]
+
+GENRE_ALLOW = [
+    "punk", "punk rock", "pop punk", "skate punk", "hardcore punk", "melodic hardcore",
+    "hardcore", "post-punk", "garage punk", "anarcho-punk", "street punk", "oi",
+    "crust punk", "celtic punk", "emo", "midwest emo", "ska punk", "ska",
+    "punk espanol", "punk español", "rock urbano", "punk rock portugues", "punk rock portugués"
+]
+
+_artist_genre_cache_memory = {}
+
+def is_deny_genre(genre_str):
+    if not genre_str:
+        return False
+    g_clean = genre_str.strip().lower()
+    for term in GENRE_DENY:
+        term_clean = term.strip().lower()
+        if term_clean == "pop":
+            if g_clean in ["pop", "dance pop"]:
+                return True
+        else:
+            if re.search(rf"\b{re.escape(term_clean)}\b", g_clean):
+                return True
+    return False
+
+def is_allow_genre(genre_str):
+    if not genre_str:
+        return False
+    g_clean = genre_str.strip().lower()
+    for term in GENRE_ALLOW:
+        term_clean = term.strip().lower()
+        if re.search(rf"\b{re.escape(term_clean)}\b", g_clean):
+            return True
+    return False
+
+def fetch_artist_genres(spotify_artist_id):
+    if not spotify_artist_id:
+        return []
+
+    if spotify_artist_id in _artist_genre_cache_memory:
+        return _artist_genre_cache_memory[spotify_artist_id]
+
+    now_iso = datetime.now().isoformat()
+
+    # 1. Check band_registry in Supabase
+    if supabase:
+        try:
+            res = supabase.table("band_registry").select("genres, genres_checked_at").eq("spotify_id", spotify_artist_id).execute()
+            if res.data and len(res.data) > 0:
+                row = res.data[0]
+                genres = row.get("genres")
+                checked_at_str = row.get("genres_checked_at")
+                if genres is not None and checked_at_str:
+                    try:
+                        checked_at = datetime.fromisoformat(checked_at_str.replace("Z", "+00:00"))
+                        if (datetime.now() - checked_at.replace(tzinfo=None)).days < 30:
+                            _artist_genre_cache_memory[spotify_artist_id] = genres
+                            return genres
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"Error checking band_registry genres cache: {e}")
+
+        # 2. Check artist_genre_cache in Supabase
+        try:
+            res = supabase.table("artist_genre_cache").select("genres, checked_at").eq("artist_id", spotify_artist_id).execute()
+            if res.data and len(res.data) > 0:
+                row = res.data[0]
+                genres = row.get("genres")
+                checked_at_str = row.get("checked_at")
+                if genres is not None and checked_at_str:
+                    try:
+                        checked_at = datetime.fromisoformat(checked_at_str.replace("Z", "+00:00"))
+                        if (datetime.now() - checked_at.replace(tzinfo=None)).days < 30:
+                            _artist_genre_cache_memory[spotify_artist_id] = genres
+                            return genres
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"Error checking artist_genre_cache: {e}")
+
+    # 3. Fetch from Spotify API via GET /artists/{id}
+    token = get_spotify_token()
+    genres = []
+    if token:
+        time.sleep(0.5)
+        url = f"https://api.spotify.com/v1/artists/{spotify_artist_id}"
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                artist_data = res.json()
+                genres = artist_data.get("genres", [])
+        except Exception as e:
+            print(f"Error fetching Spotify artist genres for {spotify_artist_id}: {e}")
+
+    _artist_genre_cache_memory[spotify_artist_id] = genres
+
+    # Store/update cache in DB
+    if supabase:
+        try:
+            supabase.table("artist_genre_cache").upsert({
+                "artist_id": spotify_artist_id,
+                "genres": genres,
+                "checked_at": now_iso
+            }, on_conflict="artist_id").execute()
+        except Exception as e:
+            print(f"Error upserting artist_genre_cache: {e}")
+
+    return genres
+
 # Circuit breaker flags and failure counters to prevent hammering when blocked
 LASTFM_BLOCKED = False
 DDG_BLOCKED = False
@@ -59,6 +190,171 @@ _MAX_CONSECUTIVE_FAILURES = 3
 
 # Spotify Auth Cache
 _spotify_token_cache = {"token": None, "expires_at": 0}
+
+def normalize_artist_name(name):
+    if not name:
+        return ""
+    clean = name.lower().strip()
+    clean = re.sub(r"[^\w\s]", "", clean)
+    clean = re.sub(r"\s+", " ", clean)
+    return clean
+
+def seed_initial_banned_artists():
+    initial_bans = [
+        {"artist_id": "sargento_dmt_placeholder", "artist_name": "SargentoDMT", "notes": "Initial seed: DJ / rave music"},
+        {"artist_id": "dany_masterpiece_placeholder", "artist_name": "Dany Masterpiece", "notes": "Initial seed: Electronic"},
+        {"artist_id": "ryan_la_rocks_placeholder", "artist_name": "Ryan La Rocks", "notes": "Initial seed: Unidentifiable genre, low quality"}
+    ]
+    if not supabase:
+        return
+    for ban in initial_bans:
+        norm_name = normalize_artist_name(ban["artist_name"])
+        payload = {
+            "artist_id": ban["artist_id"],
+            "artist_name": ban["artist_name"],
+            "normalized_name": norm_name,
+            "reason": "off_genre",
+            "notes": ban["notes"],
+            "banned_at": datetime.now().isoformat()
+        }
+        try:
+            supabase.table("banned_artists").upsert(payload, on_conflict="artist_id").execute()
+            supabase.table("band_registry").update({"banned": True}).eq("band_name", ban["artist_name"]).execute()
+        except Exception as e:
+            print(f"Error seeding initial banned artist '{ban['artist_name']}': {e}")
+
+def fetch_banned_artists():
+    banned_ids = set()
+    banned_norms = set()
+    if not supabase:
+        return banned_ids, banned_norms
+    try:
+        res = supabase.table("banned_artists").select("artist_id, artist_name, normalized_name, unbanned_at").is_("unbanned_at", "null").execute()
+        if res.data:
+            for row in res.data:
+                aid = row.get("artist_id")
+                aname = row.get("artist_name")
+                norm = row.get("normalized_name") or normalize_artist_name(aname)
+                if aid and not aid.endswith("_placeholder"):
+                    banned_ids.add(aid)
+                if norm:
+                    banned_norms.add(norm)
+    except Exception as e:
+        print(f"Error fetching banned artists: {e}")
+    return banned_ids, banned_norms
+
+def detect_manual_removals_and_ban(token, playlist_id, dry_run=False):
+    print("--- Checking Playlist for Manual Track Removals & Applying Bans ---")
+    if not token:
+        print("No Spotify token available for removal detection.")
+        return [], []
+
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+    params = {"limit": 100}
+
+    current_playlist_tracks = {} # track_id -> item_data
+
+    try:
+        while url:
+            time.sleep(0.5)
+            res = requests.get(url, headers=headers, params=params if "?" not in url else None, timeout=10)
+            if res.status_code == 200:
+                res_data = res.json()
+                # Support both new 'items' and old 'tracks' fields
+                items = res_data.get("items") or res_data.get("tracks", {}).get("items", [])
+                for item in items:
+                    # Support both new 'item' and old 'track' fields
+                    track = item.get("item") or item.get("track")
+                    if track:
+                        t_id = track.get("id")
+                        if t_id:
+                            current_playlist_tracks[t_id] = track
+                url = res_data.get("next")
+            else:
+                print(f"Warning: Could not fetch current playlist items for removal check. Status: {res.status_code}")
+                break
+    except Exception as e:
+        print(f"Error querying current playlist items: {e}")
+
+    now_iso = datetime.now().isoformat()
+
+    # Query playlist_history from DB
+    if not supabase:
+        print("[No DB] Skipping playlist_history update & ban detection.")
+        return [], []
+
+    history_rows = []
+    try:
+        res = supabase.table("playlist_history").select("*").execute()
+        if res.data:
+            history_rows = res.data
+    except Exception as e:
+        print(f"Error reading playlist_history for ban detection: {e}")
+        return [], []
+
+    present_track_ids = set(current_playlist_tracks.keys())
+    newly_banned_artists = []
+    detected_removals_count = 0
+
+    for row in history_rows:
+        t_id = row.get("track_id")
+        artist_id = row.get("artist_id")
+        artist_name = row.get("artist_name")
+        last_seen = row.get("last_seen_on_playlist_at")
+        removal_type = row.get("removal_type")
+
+        if t_id in present_track_ids:
+            # Track is present on playlist now -> update last_seen_on_playlist_at
+            if not dry_run:
+                try:
+                    supabase.table("playlist_history").update({
+                        "last_seen_on_playlist_at": now_iso
+                    }).eq("track_id", t_id).execute()
+                except Exception as e:
+                    print(f"Error updating last_seen_on_playlist_at for track {t_id}: {e}")
+        else:
+            # Track is missing from playlist
+            # Condition for manual removal: exists in history, last_seen_on_playlist_at is not null, removal_type is null
+            if last_seen is not None and removal_type is None:
+                detected_removals_count += 1
+                norm_name = normalize_artist_name(artist_name)
+                print(f"🚫 MANUAL REMOVAL DETECTED: '{artist_name}' (Track ID: {t_id}) was removed manually from playlist!")
+
+                ban_payload = {
+                    "artist_id": artist_id,
+                    "artist_name": artist_name,
+                    "normalized_name": norm_name,
+                    "reason": "manual_removal",
+                    "source_track_id": t_id,
+                    "banned_at": now_iso
+                }
+                if not any(b["artist_id"] == artist_id for b in newly_banned_artists):
+                    newly_banned_artists.append(ban_payload)
+
+                if not dry_run:
+                    try:
+                        # 1. Update playlist_history row
+                        supabase.table("playlist_history").update({
+                            "removal_type": "manual",
+                            "removal_detected_at": now_iso
+                        }).eq("track_id", t_id).execute()
+
+                        # 2. Insert into banned_artists (idempotent on artist_id)
+                        supabase.table("banned_artists").upsert(
+                            ban_payload, on_conflict="artist_id"
+                        ).execute()
+
+                        # 3. Update band_registry
+                        supabase.table("band_registry").update({
+                            "banned": True
+                        }).eq("band_name", artist_name).execute()
+
+                    except Exception as e:
+                        print(f"Error recording ban for '{artist_name}': {e}")
+
+    print(f"Manual removal check finished: {detected_removals_count} removals detected, {len(newly_banned_artists)} artist bans created.")
+    return newly_banned_artists, history_rows
 
 def get_spotify_write_token():
     refresh_token = os.environ.get("SPOTIFY_REFRESH_TOKEN")
@@ -94,7 +390,7 @@ def get_spotify_write_token():
 
 def get_monthly_listeners(artist_id):
     if not artist_id:
-        return 0
+        return None
     if artist_id in _monthly_listeners_cache:
         return _monthly_listeners_cache[artist_id]
 
@@ -103,7 +399,7 @@ def get_monthly_listeners(artist_id):
     # Scout V2.0 rule: mandatory 0.5-second delay before all external API calls
     time.sleep(0.5)
 
-    # Try bot User-Agents first as Spotify returns OG description with monthly listeners for social crawlers
+    # Try bot User-Agents as Spotify returns OG description with monthly listeners for social crawlers
     for ua in BOT_USER_AGENTS:
         headers = {
             "User-Agent": ua,
@@ -135,27 +431,9 @@ def get_monthly_listeners(artist_id):
         except Exception as e:
             print(f"Error scraping monthly listeners for artist {artist_id}: {e}")
 
-    # Fallback mechanism: fetch the artist's followers count from the official Spotify Web API
-    token = get_spotify_token()
-    if token:
-        try:
-            print(f"Spotify monthly listeners scraping returned 0 for artist {artist_id}. Falling back to fetching followers count from Spotify Web API...")
-            api_url = f"https://api.spotify.com/v1/artists/{artist_id}"
-            api_headers = {"Authorization": f"Bearer {token}"}
-            # Scout V2.0 rule: mandatory 0.5-second delay before all external API calls
-            time.sleep(0.5)
-            api_res = requests.get(api_url, headers=api_headers, timeout=10)
-            if api_res.status_code == 200:
-                artist_data = api_res.json()
-                followers = artist_data.get("followers", {}).get("total", 0)
-                if followers > 0:
-                    _monthly_listeners_cache[artist_id] = followers
-                    return followers
-        except Exception as e:
-            print(f"Error fetching Spotify followers fallback for artist {artist_id}: {e}")
-
-    _monthly_listeners_cache[artist_id] = 0
-    return 0
+    # Unknown / failed lookup -> None (never 0, followers metric removed)
+    _monthly_listeners_cache[artist_id] = None
+    return None
 
 def discover_punk_candidates(token, window_days=7, existing_candidates=None):
     print(f"--- Starting Candidate Discovery and Classification (Release window: past {window_days} days) ---")
@@ -166,6 +444,8 @@ def discover_punk_candidates(token, window_days=7, existing_candidates=None):
         candidates = {c["track_id"]: dict(c) for c in existing_candidates}
     else:
         candidates = {k: dict(v) for k, v in existing_candidates.items()}
+
+    banned_ids, banned_norms = fetch_banned_artists()
 
     execution_date = datetime.now().date()
     effective_start_date = execution_date - timedelta(days=window_days)
@@ -202,28 +482,33 @@ def discover_punk_candidates(token, window_days=7, existing_candidates=None):
         if not track_id or track_id in candidates:
             return
 
+        artists = track.get("artists", [])
+        if not artists:
+            return
+        primary_artist = artists[0]
+        artist_id = primary_artist.get("id")
+        artist_name = primary_artist.get("name", "")
+
+        # Immediate ban filter right after discovery before scraping
+        norm_name = normalize_artist_name(artist_name)
+        if (artist_id and artist_id in banned_ids) or (norm_name and norm_name in banned_norms):
+            return
+
         track_name = track.get("name", "")
         album = track.get("album", {})
         album_name = album.get("name", "")
         release_date_str = album.get("release_date")
 
         if is_eligible(track_name, album_name, release_date_str, effective_start_date):
-            artists = track.get("artists", [])
-            if artists:
-                primary_artist = artists[0]
-                artist_id = primary_artist.get("id")
-                artist_name = primary_artist.get("name")
-
-                if artist_id:
-                    candidates[track_id] = {
-                        "track_id": track_id,
-                        "track_name": track_name,
-                        "album_name": album_name,
-                        "release_date": release_date_str,
-                        "artist_id": artist_id,
-                        "artist_name": artist_name,
-                        "spotify_id": artist_id
-                    }
+            candidates[track_id] = {
+                "track_id": track_id,
+                "track_name": track_name,
+                "album_name": album_name,
+                "release_date": release_date_str,
+                "artist_id": artist_id,
+                "artist_name": artist_name,
+                "spotify_id": artist_id
+            }
 
     genres = [
         "punk", "punk rock", "pop punk", "hardcore", "skate punk",
@@ -232,7 +517,6 @@ def discover_punk_candidates(token, window_days=7, existing_candidates=None):
 
     print(f"Searching Spotify candidate tracks (Release window: past {window_days} days, start date: {effective_start_date})...")
 
-    # 1. Search across expanded punk genres with pagination & tag/year queries
     for genre in genres:
         query_templates = [
             f'genre:"{genre}"',
@@ -259,32 +543,7 @@ def discover_punk_candidates(token, window_days=7, existing_candidates=None):
                 except Exception as e:
                     print(f"Error performing search for '{query}' offset {offset}: {e}")
 
-    # 2. Query Spotify Browse New Releases API
-    for offset in [0, 50]:
-        browse_url = "https://api.spotify.com/v1/browse/new-releases"
-        browse_params = {"country": "ES", "limit": 50, "offset": offset}
-        time.sleep(0.5)
-        try:
-            b_res = requests.get(browse_url, headers=headers, params=browse_params, timeout=10)
-            if b_res.status_code == 200:
-                albums = b_res.json().get("albums", {}).get("items", [])
-                for album in albums:
-                    album_id = album.get("id")
-                    album_name = album.get("name", "")
-                    release_date_str = album.get("release_date")
-                    if album_id and parse_release_date(release_date_str) and parse_release_date(release_date_str) >= effective_start_date:
-                        t_url = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
-                        time.sleep(0.5)
-                        t_res = requests.get(t_url, headers=headers, params={"limit": 10}, timeout=10)
-                        if t_res.status_code == 200:
-                            a_tracks = t_res.json().get("items", [])
-                            for tr in a_tracks:
-                                tr["album"] = {"name": album_name, "release_date": release_date_str}
-                                process_track_item(tr, effective_start_date)
-        except Exception as e:
-            print(f"Error fetching browse new releases offset {offset}: {e}")
-
-    print(f"Discovered {len(candidates)} candidates matching past {window_days}-day release window.")
+    print(f"Discovered {len(candidates)} candidate tracks matching past {window_days}-day release window.")
 
     classified_candidates = []
 
@@ -293,7 +552,9 @@ def discover_punk_candidates(token, window_days=7, existing_candidates=None):
             artist_id = item["artist_id"]
             listeners = get_monthly_listeners(artist_id)
 
-            if listeners > 100000:
+            if listeners is None:
+                tier = "Unknown"
+            elif listeners > 100000:
                 tier = "Major"
             elif listeners >= 10000:
                 tier = "Mid"
@@ -309,59 +570,99 @@ def discover_punk_candidates(token, window_days=7, existing_candidates=None):
 
     return classified_candidates
 
-def sample_unique_artists(candidates_list, count, unavailable_artists):
-    """
-    Filters candidates_list to exclude any candidate whose artist_id is in unavailable_artists.
-    Groups the remaining candidates by artist_id, randomly samples up to `count` unique artists,
-    selects a random track for each chosen artist, and adds those artists to unavailable_artists.
-    """
-    eligible = [c for c in candidates_list if c["artist_id"] not in unavailable_artists]
+def classify_subgenre_bucket(genres):
+    if not genres:
+        return "other"
+    g_str = " ".join([g.lower() for g in genres])
+    if "pop punk" in g_str or "pop-punk" in g_str:
+        return "pop_punk"
+    if "post-punk" in g_str or "post punk" in g_str:
+        return "post_punk"
+    if "hardcore" in g_str or "metalcore" in g_str:
+        return "hardcore"
+    if "ska" in g_str:
+        return "ska"
+    if "emo" in g_str or "screamo" in g_str:
+        return "emo"
+    if "oi" in g_str or "street" in g_str:
+        return "oi_street"
+    return "other"
 
-    by_artist = {}
-    for c in eligible:
-        aid = c["artist_id"]
-        if aid not in by_artist:
-            by_artist[aid] = []
-        by_artist[aid].append(c)
+def score_candidate(candidate, user_engaged_genres):
+    listeners = candidate.get("monthly_listeners")
+    genres = candidate.get("genres", [])
+    rel_date_str = candidate.get("release_date", "")
 
-    artists_available = list(by_artist.keys())
-    selected_tracks = []
+    # 1. Listener sweet spot (2,000 to 100,000)
+    listeners_score = 0.0
+    if listeners is not None:
+        if 2000 <= listeners <= 100000:
+            listeners_score = SCORE_WEIGHTS["listener_sweet_spot"]
+        elif listeners < 2000 and listeners > 0:
+            listeners_score = SCORE_WEIGHTS["listener_sweet_spot"] * (listeners / 2000.0)
+        elif listeners > 100000:
+            listeners_score = max(5.0, SCORE_WEIGHTS["listener_sweet_spot"] * (100000.0 / listeners))
 
-    if len(artists_available) >= count:
-        selected_artists = random.sample(artists_available, count)
-    else:
-        selected_artists = artists_available
+    # 2. Genre strength (number of allow-list genres matched)
+    allow_count = sum(1 for g in genres if is_allow_genre(g))
+    genre_score = min(SCORE_WEIGHTS["genre_strength"], allow_count * 10.0)
 
-    for aid in selected_artists:
-        track = random.choice(by_artist[aid])
-        selected_tracks.append(track)
-        unavailable_artists.add(aid)
+    # 3. Taste overlap with high engagement bands
+    overlap_count = sum(1 for g in genres if g.lower() in user_engaged_genres)
+    taste_score = min(SCORE_WEIGHTS["taste_overlap"], overlap_count * 12.5)
 
-    return selected_tracks
+    # 4. Release recency
+    recency_score = 0.0
+    if rel_date_str:
+        try:
+            rel_dt = datetime.strptime(rel_date_str[:10], "%Y-%m-%d").date()
+            days_old = (datetime.now().date() - rel_dt).days
+            if days_old <= 7:
+                recency_score = SCORE_WEIGHTS["recency"]
+            elif days_old <= 30:
+                recency_score = SCORE_WEIGHTS["recency"] * 0.7
+            elif days_old <= 90:
+                recency_score = SCORE_WEIGHTS["recency"] * 0.4
+            else:
+                recency_score = SCORE_WEIGHTS["recency"] * 0.2
+        except Exception:
+            pass
+
+    # 5. Iberia bonus
+    iberia_keywords = ["espanol", "español", "urbano", "portugues", "portugués", "iberian"]
+    is_iberia = any(any(kw in g.lower() for kw in iberia_keywords) for g in genres)
+    iberia_score = SCORE_WEIGHTS["iberia_bonus"] if is_iberia else 0.0
+
+    total_score = listeners_score + genre_score + taste_score + recency_score + iberia_score
+    return round(total_score, 2)
 
 def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, existing_playlist_tracks=None, existing_playlist_keys=None, current_week=None):
     if not current_week:
         current_week = f"W{datetime.now().isocalendar()[1]}"
-    print(f"--- Selecting Tracks for Weekly Discovery Playlist ({current_week} Phase 2 Spec) ---")
-    if not candidates:
-        print("Warning: No candidates found.")
-        return []
+    print(f"--- Selecting Tracks for Weekly Discovery Playlist ({current_week} Quality Overhaul) ---")
 
+    if not candidates:
+        print("Warning: No candidates provided.")
+        return [], {}
+
+    banned_ids, banned_norms = fetch_banned_artists()
     excluded_track_ids = set(existing_playlist_tracks) if existing_playlist_tracks else set()
     excluded_track_keys = set(existing_playlist_keys) if existing_playlist_keys else set()
+    active_playlist_artists = set(existing_playlist_artists) if existing_playlist_artists else set()
 
-    # Get band registry data, top50 set, and playlist_history from Supabase
     band_registry_map = {}
     top50_bands = set()
+    user_engaged_genres = set()
 
     if supabase:
         try:
             res = supabase.table("band_registry").select("*").execute()
             if res.data:
                 for row in res.data:
-                    band_registry_map[row["band_name"].lower()] = row
+                    b_lower = row["band_name"].lower()
+                    band_registry_map[b_lower] = row
                     if row.get("ever_featured_in_top50"):
-                        top50_bands.add(row["band_name"].lower())
+                        top50_bands.add(b_lower)
         except Exception as e:
             print(f"Error querying band_registry: {e}")
 
@@ -379,6 +680,18 @@ def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, ex
         except Exception as e:
             print(f"Error querying playlist_history for duplicate track exclusion: {e}")
 
+        # Fetch taste overlap genres from high interaction weekly submissions
+        try:
+            ws_res = supabase.table("weekly_submissions").select("band_name").gte("interaction_score", 2).execute()
+            if ws_res.data:
+                high_bands = {r["band_name"].lower() for r in ws_res.data if r.get("band_name")}
+                for hb in high_bands:
+                    if hb in band_registry_map and band_registry_map[hb].get("genres"):
+                        for g in band_registry_map[hb]["genres"]:
+                            user_engaged_genres.add(g.lower())
+        except Exception as e:
+            print(f"Error querying weekly_submissions taste overlap: {e}")
+
     # Helper to parse week string (e.g., "W33" -> 33)
     def parse_week_num(w_str):
         if not w_str or not isinstance(w_str, str):
@@ -388,7 +701,7 @@ def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, ex
 
     curr_w_num = parse_week_num(current_week)
 
-    def is_band_excluded(band_name, max_excluded_weeks=10):
+    def is_band_recency_excluded(band_name, max_excluded_weeks=10):
         b_lower = band_name.lower()
         if b_lower not in band_registry_map:
             return False
@@ -401,87 +714,173 @@ def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, ex
                 return True
         return False
 
-    # Sort candidates: (listener_count ASC) -> (release_date DESC) -> random tie-break
-    sorted_candidates = list(candidates)
-    random.shuffle(sorted_candidates)  # tie-break
-    sorted_candidates.sort(key=lambda c: (c.get("monthly_listeners", 0), c.get("release_date", "")))
+    report_stats = {
+        "total_candidates": len(candidates),
+        "rejected_banned": 0,
+        "rejected_deny_genre": 0,
+        "rejected_no_genre": 0,
+        "rejected_unknown_listeners": 0,
+        "rejected_recency": 0,
+        "rejected_duplicate_track": 0,
+        "eligible_candidates": 0
+    }
 
-    active_playlist_artists = set(existing_playlist_artists) if existing_playlist_artists else set()
+    # Step 1: Pre-fetch genres and filter HARD gates (Genre, Ban, Unknown Listeners)
+    valid_candidates = []
+    seen_artists_step1 = set()
 
-    # Multi-stage relaxation ladder for exclusion window: 10 weeks -> 6 weeks -> 4 weeks -> 2 weeks -> 0 weeks (no recency cap)
+    for c in candidates:
+        aid = c.get("artist_id") or c.get("spotify_id")
+        aname = c.get("artist_name", "")
+        norm_name = normalize_artist_name(aname)
+        tid = c.get("track_id")
+        tname = c.get("track_name", "")
+        tkey = (aname.lower(), tname.lower())
+
+        # Ban gate
+        if (aid and aid in banned_ids) or (norm_name and norm_name in banned_norms):
+            report_stats["rejected_banned"] += 1
+            continue
+
+        # Duplicate track gate
+        if (tid and tid in excluded_track_ids) or tkey in excluded_track_keys:
+            report_stats["rejected_duplicate_track"] += 1
+            continue
+
+        # Listener metric gate (None = unknown listeners -> Exclude)
+        listeners = c.get("monthly_listeners")
+        if listeners is None:
+            report_stats["rejected_unknown_listeners"] += 1
+            continue
+
+        # Fetch artist genres
+        genres = fetch_artist_genres(aid)
+        c["genres"] = genres
+
+        # Deny list genre check
+        if any(is_deny_genre(g) for g in genres):
+            report_stats["rejected_deny_genre"] += 1
+            continue
+
+        # Unverified (empty genre list) check
+        if not genres or not any(is_allow_genre(g) for g in genres):
+            if ALLOW_UNVERIFIED_MAX == 0:
+                report_stats["rejected_no_genre"] += 1
+                continue
+            else:
+                c["unverified"] = True
+
+        # Assign score and subgenre bucket
+        c["score"] = score_candidate(c, user_engaged_genres)
+        c["subgenre_bucket"] = classify_subgenre_bucket(genres)
+
+        valid_candidates.append(c)
+
+    report_stats["eligible_candidates"] = len(valid_candidates)
+    print(f"Surviving candidates after hard gates: {len(valid_candidates)}")
+
+    # Sort valid candidates by score DESC
+    valid_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    # Relaxation ladder for RECENCY ONLY (10 -> 6 -> 4 -> 2 -> 0 weeks)
     exclusion_tiers = [10, 6, 4, 2, 0]
     selected_tracks = []
-    seen_bands = set()
-    total_unique_candidate_bands = len({c["artist_name"].lower() for c in sorted_candidates})
 
     for max_weeks in exclusion_tiers:
-        for c in sorted_candidates:
-            if len(selected_tracks) >= 10:
-                break
-            b_name = c["artist_name"]
-            b_lower = b_name.lower()
+        # Candidate pool for this relaxation level
+        pool = []
+        for c in valid_candidates:
+            aname = c["artist_name"]
             a_id = c.get("artist_id")
-            t_id = c.get("track_id")
-            t_name = c.get("track_name", "")
-            t_key = (b_lower, t_name.lower())
-
-            # Skip duplicate tracks previously included or currently on playlist
-            if (t_id and t_id in excluded_track_ids) or t_key in excluded_track_keys:
-                continue
-
             if a_id and a_id in active_playlist_artists:
                 continue
-            if b_lower in seen_bands:
+            if is_band_recency_excluded(aname, max_excluded_weeks=max_weeks):
                 continue
-            if is_band_excluded(b_name, max_excluded_weeks=max_weeks):
-                continue
+            pool.append(c)
 
-            seen_bands.add(b_lower)
-            selected_tracks.append(c)
+        if not pool:
+            print(f"Relaxing recency exclusion to {max_weeks} weeks...")
+            continue
 
-        if len(selected_tracks) >= 10 or total_unique_candidate_bands < 10:
-            break
-        print(f"Relaxing band registry recency exclusion to {max_weeks} weeks (currently selected {len(selected_tracks)} tracks)...")
+        # Top ~40 scored candidates
+        top_pool = pool[:POOL_TOP_N]
 
-    # Final padding fallback: if still under 10 tracks and total candidate pool >= 10, allow candidates already on active playlist
-    if len(selected_tracks) < 10 and total_unique_candidate_bands >= 10:
-        print(f"Applying final padding fallback (allowing active playlist artists if needed)...")
-        for c in sorted_candidates:
-            if len(selected_tracks) >= 10:
+        # Quota-aware picking loop over top pool
+        bucket_counts = {}
+        selected_artists_run = set()
+        candidates_under_100k = [c for c in top_pool if (c.get("monthly_listeners") or 0) < 100000]
+
+        # Reset selection for this tier attempt
+        selected_tracks = []
+
+        # Weighted random selection from top_pool
+        # Repeat sampling until 10 tracks selected or pool exhausted
+        remaining_pool = list(top_pool)
+
+        while remaining_pool and len(selected_tracks) < 10:
+            # Enforce 80% under 100k quota requirement & 50% not-in-top50 requirement
+            needed_under_100k = math.ceil((len(selected_tracks) + 1) * 0.8)
+            current_under_100k = sum(1 for t in selected_tracks if (t.get("monthly_listeners") or 0) < 100000)
+
+            needed_not_top50 = math.ceil((len(selected_tracks) + 1) * 0.5)
+            current_not_top50 = sum(1 for t in selected_tracks if t["artist_name"].lower() not in top50_bands)
+
+            # Filter candidates matching bucket cap and artist uniqueness
+            eligible_pool = []
+            for c in remaining_pool:
+                a_id = c["artist_id"]
+                aname_lower = c["artist_name"].lower()
+                b_bucket = c["subgenre_bucket"]
+                if a_id in selected_artists_run:
+                    continue
+                if bucket_counts.get(b_bucket, 0) >= SUBGENRE_CAP:
+                    continue
+
+                # If under 100k quota is falling behind, prioritize under 100k
+                if current_under_100k < needed_under_100k and (c.get("monthly_listeners") or 0) >= 100000:
+                    if any((x.get("monthly_listeners") or 0) < 100000 for x in remaining_pool if x["artist_id"] not in selected_artists_run and bucket_counts.get(x["subgenre_bucket"], 0) < SUBGENRE_CAP):
+                        continue
+
+                # If not-in-top50 quota is falling behind, prioritize not-in-top50
+                if current_not_top50 < needed_not_top50 and aname_lower in top50_bands:
+                    if any(x["artist_name"].lower() not in top50_bands for x in remaining_pool if x["artist_id"] not in selected_artists_run and bucket_counts.get(x["subgenre_bucket"], 0) < SUBGENRE_CAP):
+                        continue
+
+                eligible_pool.append(c)
+
+            if not eligible_pool:
                 break
-            b_name = c["artist_name"]
-            b_lower = b_name.lower()
-            t_id = c.get("track_id")
-            t_name = c.get("track_name", "")
-            t_key = (b_lower, t_name.lower())
 
-            # NEVER allow duplicate tracks even in padding fallback
-            if (t_id and t_id in excluded_track_ids) or t_key in excluded_track_keys:
-                continue
+            # Weighted probability based on score
+            scores = [max(1.0, float(c["score"])) for c in eligible_pool]
+            total_s = sum(scores)
+            weights = [s / total_s for s in scores]
 
-            if b_lower in seen_bands:
-                continue
-            seen_bands.add(b_lower)
-            selected_tracks.append(c)
+            chosen = random.choices(eligible_pool, weights=weights, k=1)[0]
+            selected_tracks.append(chosen)
+            selected_artists_run.add(chosen["artist_id"])
+            bucket_counts[chosen["subgenre_bucket"]] = bucket_counts.get(chosen["subgenre_bucket"], 0) + 1
+            remaining_pool.remove(chosen)
 
-    # Enforce constraints reporting:
-    under_100k_count = sum(1 for t in selected_tracks if t.get("monthly_listeners", 0) < 100000)
-    not_top50_count = sum(1 for t in selected_tracks if t["artist_name"].lower() not in top50_bands)
+        if len(selected_tracks) >= 10:
+            break
 
-    if len(selected_tracks) < 10:
-        print(f"ALERT / FAILURE: Could only find {len(selected_tracks)} songs satisfying Phase 2 rules!")
+        print(f"Relaxing recency exclusion to {max_weeks} weeks (selected {len(selected_tracks)} tracks so far)...")
 
-    if len(selected_tracks) > 0:
-        if (under_100k_count / len(selected_tracks)) < 0.8:
-            print("Warning: Listener count rule unsatisfied (< 80% under 100k listeners).")
-        if (not_top50_count / len(selected_tracks)) < 0.5:
-            print("Warning: Diversity check unsatisfied (< 50% not in top50).")
+    if len(selected_tracks) < MIN_PLAYLIST_SIZE_ALERT:
+        print(f"\n🚨 ALERT / FAILURE: Could only find {len(selected_tracks)} tracks meeting all quality rules (fewer than {MIN_PLAYLIST_SIZE_ALERT} minimum threshold!).")
+    elif len(selected_tracks) < 10:
+        print(f"\nNotice: Publishing fewer than 10 tracks ({len(selected_tracks)} tracks qualified). Quality beats count.")
 
     print(f"Selection complete. Selected {len(selected_tracks)} tracks.")
-    return selected_tracks
+    return selected_tracks, report_stats
 
-def generate_monday_playlist():
+def generate_monday_playlist(dry_run=False):
     print("--- Running Monday Playlist Generation Flow ---")
+    if dry_run:
+        print("🔍 [DRY RUN MODE ENABLED] No Spotify or Supabase database writes will be executed.")
+
+    seed_initial_banned_artists()
 
     # 1. Get write token
     token = get_spotify_write_token()
@@ -490,7 +889,7 @@ def generate_monday_playlist():
         return
 
     # Check if we fell back to client credentials
-    if token == get_spotify_token():
+    if token == get_spotify_token() and not dry_run:
         print("\n" + "="*80)
         print("⚠️  WARNING: The obtained Spotify token is a Client Credentials token (not a User Write Token).")
         print("Playlist modifications (adding/pruning tracks) will fail with 401/403 errors")
@@ -500,7 +899,10 @@ def generate_monday_playlist():
     playlist_id = "2ZqhNVOPmA3Nf0SRpzJ9Yz"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    # 2. Playlist Pruning check & gather active artists & tracks already in playlist upfront
+    # 2. Run manual removal detection BEFORE pruning & discovery
+    new_bans, history_rows = detect_manual_removals_and_ban(token, playlist_id, dry_run=dry_run)
+
+    # 3. Playlist Pruning check & gather active artists & tracks already in playlist upfront
     print("Checking playlist tracks for pruning (>84 days old), current artists, and existing tracks...")
     tracks_to_prune = []
     existing_playlist_artists = set()
@@ -515,10 +917,10 @@ def generate_monday_playlist():
             res = requests.get(url, headers=headers, params=params if "?" not in url else None, timeout=10)
             if res.status_code == 200:
                 res_data = res.json()
-                items = res_data.get("items", [])
+                items = res_data.get("items") or res_data.get("tracks", {}).get("items", [])
                 for item in items:
                     added_at_str = item.get("added_at")
-                    track = item.get("track")
+                    track = item.get("item") or item.get("track")
                     if track:
                         track_id = track.get("id")
                         track_name = track.get("name", "")
@@ -551,15 +953,16 @@ def generate_monday_playlist():
     except Exception as e:
         print(f"Error during playlist pruning check: {e}")
 
-    # 3. Progressive release window expansion: 7 days -> 14 -> 30 -> 60 -> 90 -> 180 days
+    # 4. Progressive release window expansion: 7 days -> 14 -> 30 -> 60 -> 90 -> 180 days
     window_tiers = [7, 14, 30, 60, 90, 180]
     candidates = []
     selected = []
+    run_stats = {}
 
     for w_days in window_tiers:
         try:
             candidates = discover_punk_candidates(token, window_days=w_days, existing_candidates=candidates)
-            selected = select_weekly_playlist_tracks(
+            selected, run_stats = select_weekly_playlist_tracks(
                 candidates,
                 existing_playlist_artists=existing_playlist_artists,
                 existing_playlist_tracks=existing_playlist_tracks,
@@ -573,48 +976,65 @@ def generate_monday_playlist():
         except Exception as e:
             print(f"Error during candidate discovery/selection for window past {w_days} days: {e}")
 
-    if len(selected) < 10:
-        print(f"\n" + "="*80)
-        print(f"🚨 ALERT / FAILURE: Could only find {len(selected)} tracks meeting all Phase 2 rules across all release windows up to 180 days.")
-        print("Rule requirement: Must hit exactly 10 songs. Halting workflow (no tracks added to Spotify).")
+    # Instrument system pruning BEFORE deleting from Spotify
+    if tracks_to_prune:
+        now_iso = datetime.now().isoformat()
+        for pt in tracks_to_prune:
+            tid = pt.get("track_id")
+            if tid and supabase and not dry_run:
+                try:
+                    supabase.table("playlist_history").update({
+                        "removal_type": "system_prune",
+                        "removal_detected_at": now_iso
+                    }).eq("track_id", tid).execute()
+                except Exception as e:
+                    print(f"Error logging system_prune in playlist_history for track {tid}: {e}")
+
+        if not dry_run:
+            print(f"Removing {len(tracks_to_prune)} expired tracks from Spotify playlist...")
+            try:
+                url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+                time.sleep(0.5)
+                res = requests.delete(url, headers=headers, json={"tracks": [{"uri": pt["uri"]} for pt in tracks_to_prune]}, timeout=10)
+                if res.status_code == 200:
+                    print("Pruned tracks successfully deleted from Spotify.")
+                else:
+                    print(f"Warning: Deleting pruned tracks returned status: {res.status_code}")
+            except Exception as e:
+                print(f"Error deleting pruned tracks from Spotify: {e}")
+        else:
+            print(f"[DRY RUN] Would delete {len(tracks_to_prune)} expired tracks from Spotify playlist.")
+
+    if not selected:
+        print("\n" + "="*80)
+        print("🚨 ALERT / FAILURE: 0 qualifying tracks found across all release windows.")
         print("="*80 + "\n")
         return
 
-    # Delete pruned tracks if any
-    if tracks_to_prune:
-        print(f"Removing {len(tracks_to_prune)} expired tracks from playlist...")
+    # Add new selected tracks to top (position 0)
+    track_uris = [f"spotify:track:{s['track_id']}" for s in selected]
+    if not dry_run:
+        print(f"Adding {len(track_uris)} new tracks to the top of the playlist...")
         try:
             url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+            payload = {
+                "uris": track_uris,
+                "position": 0
+            }
             time.sleep(0.5)
-            # Delete expects payload with "tracks": [{"uri": "..."}]
-            res = requests.delete(url, headers=headers, json={"tracks": tracks_to_prune}, timeout=10)
-            if res.status_code == 200:
-                print("Pruned tracks successfully deleted.")
+            res = requests.post(url, headers=headers, json=payload, timeout=10)
+            if res.status_code in [200, 201]:
+                print("Successfully populated weekly playlist tracks on Spotify!")
             else:
-                print(f"Warning: Deleting pruned tracks returned status: {res.status_code}")
+                print(f"Warning: Failed to add tracks to Spotify playlist. Status code: {res.status_code}")
         except Exception as e:
-            print(f"Error deleting pruned tracks: {e}")
+            print(f"Error adding tracks to Spotify playlist: {e}")
+    else:
+        print(f"[DRY RUN] Would add {len(track_uris)} new tracks to Spotify playlist.")
 
-    # 5. Add new selected tracks to top (position 0)
-    track_uris = [f"spotify:track:{s['track_id']}" for s in selected]
-    print(f"Adding {len(track_uris)} new tracks to the top of the playlist...")
-    try:
-        url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
-        payload = {
-            "uris": track_uris,
-            "position": 0
-        }
-        time.sleep(0.5)
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
-        if res.status_code in [200, 201]:
-            print("Successfully populated weekly playlist tracks!")
-        else:
-            print(f"Warning: Failed to add tracks to Spotify playlist. Status code: {res.status_code}")
-    except Exception as e:
-        print(f"Error adding tracks to Spotify playlist: {e}")
-
-    # 6. Insert into database `playlist_history` table
-    if supabase:
+    # Insert into database `playlist_history` table
+    now_iso = datetime.now().isoformat()
+    if supabase and not dry_run:
         print("Logging selected tracks into playlist_history...")
         for s in selected:
             try:
@@ -625,12 +1045,12 @@ def generate_monday_playlist():
                     "artist_name": s["artist_name"],
                     "tier": s["tier"],
                     "monthly_listeners": s["monthly_listeners"],
-                    "release_date": s["release_date"]
+                    "release_date": s["release_date"],
+                    "last_seen_on_playlist_at": now_iso
                 }).execute()
             except Exception as dbe:
                 print(f"Error inserting track log into DB for {s['track_name']}: {dbe}")
 
-        # 7. Deduplicate artist database / Tour Tracker Integration
         print("Integrating new artists with Tour Tracker...")
         existing_artist_names = set()
         try:
@@ -666,9 +1086,34 @@ def generate_monday_playlist():
                     print(f"Error inserting new artist '{artist_name}' into DB: {ie}")
             else:
                 print(f"Artist '{artist_name}' already exists in DB. Skipping.")
-
     else:
-        print("[No DB] Would log to history and integrate artists with Tour Tracker.")
+        print("[DRY RUN / No DB] Would log to history and integrate artists with Tour Tracker.")
+
+    # PRINT OBSERVABILITY RUN REPORT
+    print("\n" + "="*80)
+    print("📊 WEEKLY PLAYLIST QUALITY OVERHAUL - EXECUTION REPORT")
+    print("="*80)
+    print(f"Discovered Candidates:         {run_stats.get('total_candidates', 0)}")
+    print(f"Eligible Surviving Candidates: {run_stats.get('eligible_candidates', 0)}")
+    print("\nRejections by Reason:")
+    print(f"  • Banned Artists:            {run_stats.get('rejected_banned', 0)}")
+    print(f"  • Off-Genre / Deny List:     {run_stats.get('rejected_deny_genre', 0)}")
+    print(f"  • Unverified / No Genres:    {run_stats.get('rejected_no_genre', 0)}")
+    print(f"  • Unknown Listeners (None):  {run_stats.get('rejected_unknown_listeners', 0)}")
+    print(f"  • Duplicate Tracks:          {run_stats.get('rejected_duplicate_track', 0)}")
+    print(f"\nManual Removals Detected:     {len(new_bans)}")
+    if new_bans:
+        for nb in new_bans:
+            print(f"  🚫 Banned: {nb['artist_name']} (Track ID: {nb['source_track_id']})")
+
+    print(f"\nFinal Selected Tracks ({len(selected)}/10):")
+    print("-" * 80)
+    for idx, tr in enumerate(selected, 1):
+        g_str = ", ".join(tr.get("genres", [])) if tr.get("genres") else "None"
+        l_str = f"{tr.get('monthly_listeners'):,}" if tr.get("monthly_listeners") is not None else "Unknown"
+        print(f"{idx:2d}. '{tr.get('track_name')}' by {tr.get('artist_name')}")
+        print(f"    Listeners: {l_str} | Score: {tr.get('score')} | Bucket: {tr.get('subgenre_bucket')} | Genres: [{g_str}]")
+    print("="*80 + "\n")
 
 def get_spotify_token():
     now = time.time()
@@ -2053,11 +2498,13 @@ def main():
     parser.add_argument("--weekly", action="store_true", help="Run the Wednesday Automated Ingestion (Module A)")
     parser.add_argument("--monday-playlist", action="store_true", help="Run the Monday Automated Playlist Curation")
     parser.add_argument("--analytics", action="store_true", help="Run the Sunday Band Analytics Snapshot & Recalculation")
+    parser.add_argument("--dry-run", action="store_true", help="Run Monday playlist curation in dry-run mode without DB or Spotify writes")
 
     args = parser.parse_args()
 
     # Automatically sweep and delete past concerts older than today
-    sweep_past_concerts()
+    if not args.dry_run:
+        sweep_past_concerts()
 
     if args.playlist:
         ingest_playlist_all(args.playlist)
@@ -2066,8 +2513,9 @@ def main():
         ingest_weekly_punk()
         run_enrichment_pipeline()
     elif args.monday_playlist:
-        generate_monday_playlist()
-        track_tour_events()
+        generate_monday_playlist(dry_run=args.dry_run)
+        if not args.dry_run:
+            track_tour_events()
     elif args.analytics:
         take_band_listener_snapshots()
         recalculate_analytics_summary()

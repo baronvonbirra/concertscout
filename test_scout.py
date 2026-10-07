@@ -229,43 +229,127 @@ class TestScoutV2(unittest.TestCase):
         mock_supabase.table.assert_any_call("concerts")
         mock_supabase.table.assert_any_call("tour_events")
 
-    @patch('scout.supabase')
-    def test_select_weekly_playlist_tracks_phase2_rules(self, mock_supabase):
-        # Mock band_registry
-        mock_table = MagicMock()
-        mock_select = MagicMock()
-        mock_execute = MagicMock()
+    def test_genre_gate_rules(self):
+        # 1. Known bad artists
+        self.assertTrue(scout.is_deny_genre("dj / rave music"))
+        self.assertTrue(scout.is_deny_genre("electronic"))
+        self.assertTrue(scout.is_deny_genre("edm"))
+        self.assertTrue(scout.is_deny_genre("dance pop"))
 
-        mock_execute.data = [
-            {"band_name": "Used Recently Band", "last_used_in_playlist": "W30", "ever_featured_in_top50": False},
-            {"band_name": "Old Band", "last_used_in_playlist": "W15", "ever_featured_in_top50": True}
-        ]
-        mock_supabase.table.return_value = mock_table
-        mock_table.select.return_value = mock_execute
-        mock_execute.execute.return_value = mock_execute
+        # 2. Whole-word / exact phrase matching
+        self.assertTrue(scout.is_deny_genre("happy hardcore"))
+        self.assertTrue(scout.is_deny_genre("hardcore techno"))
+        self.assertFalse(scout.is_deny_genre("hardcore punk"))
+        self.assertTrue(scout.is_allow_genre("hardcore punk"))
+
+        # 3. Empty genre list = unverified (rejected by default)
+        self.assertFalse(scout.is_allow_genre(""))
+
+    @patch('scout.requests.get')
+    def test_get_monthly_listeners_returns_none_on_failure(self, mock_get):
+        mock_get.side_effect = Exception("Scraping failed")
+        scout._monthly_listeners_cache.clear()
+
+        listeners = scout.get_monthly_listeners("nonexistent_artist_id")
+        self.assertIsNone(listeners)
+
+    @patch('scout.supabase')
+    @patch('scout.fetch_artist_genres')
+    def test_select_weekly_playlist_tracks_quality_overhaul(self, mock_fetch_genres, mock_supabase):
+        def table_side_effect(name):
+            m = MagicMock()
+            m.select.return_value.execute.return_value = MagicMock(data=[])
+            m.select.return_value.gte.return_value.execute.return_value = MagicMock(data=[])
+            m.select.return_value.is_.return_value.execute.return_value = MagicMock(data=[])
+            return m
+
+        mock_supabase.table.side_effect = table_side_effect
+
+        def genres_side_effect(art_id):
+            if art_id == "a_bad_dj":
+                return ["dj", "electronic"]
+            elif art_id == "a_unknown":
+                return []
+            elif art_id == "a_happy_hardcore":
+                return ["happy hardcore"]
+            elif art_id.startswith("a_pop_punk"):
+                return ["pop punk"]
+            return ["hardcore punk"]
+
+        mock_fetch_genres.side_effect = genres_side_effect
 
         candidates = [
-            {"track_id": "t1", "track_name": "Song 1", "artist_id": "a1", "artist_name": "Used Recently Band", "monthly_listeners": 5000, "release_date": "2026-02-01"},
-            {"track_id": "t2", "track_name": "Song 2", "artist_id": "a2", "artist_name": "Fresh Band 1", "monthly_listeners": 12000, "release_date": "2026-02-01"},
-            {"track_id": "t3", "track_name": "Song 3", "artist_id": "a3", "artist_name": "Old Band", "monthly_listeners": 45000, "release_date": "2026-02-01"},
+            {"track_id": "t_bad", "artist_id": "a_bad_dj", "artist_name": "SargentoDMT", "monthly_listeners": 5000, "release_date": "2026-02-01"},
+            {"track_id": "t_no_g", "artist_id": "a_unknown", "artist_name": "Unknown Band", "monthly_listeners": 5000, "release_date": "2026-02-01"},
+            {"track_id": "t_none_l", "artist_id": "a_none", "artist_name": "No Listener Band", "monthly_listeners": None, "release_date": "2026-02-01"},
+            {"track_id": "t_happy_hc", "artist_id": "a_happy_hardcore", "artist_name": "Happy HC Band", "monthly_listeners": 5000, "release_date": "2026-02-01"},
         ]
 
-        # W33 - W30 = 3 <= 10 -> "Used Recently Band" excluded
-        # "Old Band" last used W15 (33-15 = 18 > 10) -> included
-        selected = scout.select_weekly_playlist_tracks(candidates, current_week="W33")
+        # Add 5 pop punk tracks (testing subgenre cap of 2)
+        for i in range(1, 6):
+            candidates.append({"track_id": f"t_pp_{i}", "artist_id": f"a_pop_punk_{i}", "artist_name": f"Pop Punk Band {i}", "monthly_listeners": 5000 + i*100, "release_date": "2026-02-01"})
 
-        selected_names = [s["artist_name"] for s in selected]
-        self.assertNotIn("Used Recently Band", selected_names)
-        self.assertIn("Fresh Band 1", selected_names)
-        self.assertIn("Old Band", selected_names)
+        selected, stats = scout.select_weekly_playlist_tracks(candidates, current_week="W33")
+
+        selected_ids = [s["track_id"] for s in selected]
+        self.assertNotIn("t_bad", selected_ids)
+        self.assertNotIn("t_no_g", selected_ids)
+        self.assertNotIn("t_none_l", selected_ids)
+        self.assertNotIn("t_happy_hc", selected_ids)
+
+        # Check subgenre cap of 2 for pop_punk
+        pp_selected = [s for s in selected if s["subgenre_bucket"] == "pop_punk"]
+        self.assertLessEqual(len(pp_selected), scout.SUBGENRE_CAP)
+
+    @patch('scout.supabase')
+    @patch('scout.requests.get')
+    def test_detect_manual_removals_and_ban(self, mock_get, mock_supabase):
+        # 1. Mock playlist endpoint response with track present
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.json.return_value = {
+            "items": [
+                {"item": {"id": "t_present_1", "name": "Present Song", "artists": [{"id": "a_present", "name": "Present Act"}]}}
+            ]
+        }
+        mock_get.return_value = mock_res
+
+        # 2. Mock DB playlist_history
+        history_data = [
+            {"track_id": "t_present_1", "artist_id": "a_present", "artist_name": "Present Act", "last_seen_on_playlist_at": "2026-01-01T00:00:00", "removal_type": None},
+            {"track_id": "t_removed_manual", "artist_id": "a_removed_manual", "artist_name": "Manual Removed Act", "last_seen_on_playlist_at": "2026-01-01T00:00:00", "removal_type": None},
+            {"track_id": "t_removed_pruned", "artist_id": "a_removed_pruned", "artist_name": "Pruned Act", "last_seen_on_playlist_at": "2026-01-01T00:00:00", "removal_type": "system_prune"},
+            {"track_id": "t_never_seen", "artist_id": "a_never_seen", "artist_name": "Never Seen Act", "last_seen_on_playlist_at": None, "removal_type": None}
+        ]
+
+        def table_side_effect(name):
+            m = MagicMock()
+            if name == "playlist_history":
+                m.select.return_value.execute.return_value = MagicMock(data=history_data)
+                m.update.return_value.eq.return_value.execute.return_value = MagicMock()
+            elif name == "banned_artists":
+                m.upsert.return_value.execute.return_value = MagicMock()
+            elif name == "band_registry":
+                m.update.return_value.eq.return_value.execute.return_value = MagicMock()
+            return m
+
+        mock_supabase.table.side_effect = table_side_effect
+
+        new_bans, history = scout.detect_manual_removals_and_ban("mock_token", "mock_playlist_id", dry_run=False)
+
+        # Only 'Manual Removed Act' should generate a ban row
+        self.assertEqual(len(new_bans), 1)
+        self.assertEqual(new_bans[0]["artist_name"], "Manual Removed Act")
+        self.assertEqual(new_bans[0]["artist_id"], "a_removed_manual")
 
     @patch('scout.supabase')
     def test_select_weekly_playlist_tracks_duplicate_track_exclusion(self, mock_supabase):
         def table_side_effect(name):
             m = MagicMock()
-            if name == "band_registry":
-                m.select.return_value.execute.return_value = MagicMock(data=[])
-            elif name == "playlist_history":
+            m.select.return_value.execute.return_value = MagicMock(data=[])
+            m.select.return_value.gte.return_value.execute.return_value = MagicMock(data=[])
+            m.select.return_value.is_.return_value.execute.return_value = MagicMock(data=[])
+            if name == "playlist_history":
                 m.select.return_value.execute.return_value = MagicMock(data=[
                     {"track_id": "hist_t1", "track_name": "History Song", "artist_name": "History Band"}
                 ])
@@ -283,12 +367,13 @@ class TestScoutV2(unittest.TestCase):
             {"track_id": "fresh_t4", "track_name": "Fresh Song", "artist_id": "a4", "artist_name": "Fresh Band", "monthly_listeners": 8000, "release_date": "2026-02-01"},
         ]
 
-        selected = scout.select_weekly_playlist_tracks(
-            candidates,
-            existing_playlist_tracks=existing_playlist_tracks,
-            existing_playlist_keys=existing_playlist_keys,
-            current_week="W33"
-        )
+        with patch('scout.fetch_artist_genres', return_value=['punk rock']):
+            selected, stats = scout.select_weekly_playlist_tracks(
+                candidates,
+                existing_playlist_tracks=existing_playlist_tracks,
+                existing_playlist_keys=existing_playlist_keys,
+                current_week="W33"
+            )
 
         selected_ids = [s["track_id"] for s in selected]
         self.assertNotIn("hist_t1", selected_ids)
@@ -558,7 +643,8 @@ class TestScoutV2(unittest.TestCase):
         self.assertEqual(count, 121100)
 
     @patch('scout.supabase')
-    def test_select_weekly_playlist_tracks_relaxation(self, mock_supabase):
+    @patch('scout.fetch_artist_genres')
+    def test_select_weekly_playlist_tracks_relaxation(self, mock_fetch_genres, mock_supabase):
         # Test that when candidate pool has >= 10 candidates and strict 10-week check excludes too many,
         # the relaxation ladder lowers exclusion criteria to select 10 tracks.
         mock_table = MagicMock()
@@ -576,6 +662,22 @@ class TestScoutV2(unittest.TestCase):
         mock_table.select.return_value = mock_execute
         mock_execute.execute.return_value = mock_execute
 
+        # Assign diverse subgenre bucket genres so subgenre cap (2) allows 10 tracks across buckets
+        genres_by_idx = {
+            1: ["pop punk"], 2: ["pop punk"],
+            3: ["post punk"], 4: ["post punk"],
+            5: ["hardcore"], 6: ["hardcore"],
+            7: ["ska"], 8: ["ska"],
+            9: ["emo"], 10: ["emo"],
+            11: ["oi!"], 12: ["oi!"]
+        }
+
+        def mock_genres(art_id):
+            idx = int(art_id.replace("a", ""))
+            return genres_by_idx.get(idx, ["punk rock"])
+
+        mock_fetch_genres.side_effect = mock_genres
+
         candidates = [
             {
                 "track_id": f"t{i}",
@@ -588,7 +690,7 @@ class TestScoutV2(unittest.TestCase):
             for i in range(1, 13)
         ]
 
-        selected = scout.select_weekly_playlist_tracks(candidates, current_week=f"W{today_week_num}")
+        selected, stats = scout.select_weekly_playlist_tracks(candidates, current_week=f"W{today_week_num}")
         self.assertEqual(len(selected), 10)
 
     @patch('scout.get_monthly_listeners', return_value=5000)
@@ -618,11 +720,12 @@ class TestScoutV2(unittest.TestCase):
         self.assertEqual(candidates[0]["artist_name"], "The Distillers")
 
     @patch('scout.supabase')
+    @patch('scout.fetch_artist_genres')
     @patch('scout.requests.post')
     @patch('scout.requests.get')
     @patch('scout.discover_punk_candidates')
     @patch('scout.get_spotify_write_token')
-    def test_generate_monday_playlist_progressive_window_expansion(self, mock_write_token, mock_discover, mock_get, mock_post, mock_supabase):
+    def test_generate_monday_playlist_progressive_window_expansion(self, mock_write_token, mock_discover, mock_get, mock_post, mock_fetch_genres, mock_supabase):
         mock_write_token.return_value = "mock_write_token"
 
         # Mock playlist tracks GET
@@ -642,6 +745,21 @@ class TestScoutV2(unittest.TestCase):
         mock_table.select.return_value.execute.return_value = MagicMock(data=[])
 
         today_str = datetime.now().date().isoformat()
+
+        # Diverse genres so subgenre cap (2) allows 10 tracks
+        genres_by_idx = {
+            1: ["pop punk"], 2: ["pop punk"],
+            3: ["post punk"], 4: ["post punk"],
+            5: ["hardcore"], 6: ["hardcore"],
+            7: ["ska"], 8: ["ska"],
+            9: ["emo"], 10: ["emo"]
+        }
+
+        def mock_genres(art_id):
+            idx = int(art_id.replace("a", ""))
+            return genres_by_idx.get(idx, ["punk rock"])
+
+        mock_fetch_genres.side_effect = mock_genres
 
         # Window 7 days returns 3 tracks, window 14 returns 10 tracks
         candidates_7d = [
