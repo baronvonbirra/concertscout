@@ -1465,6 +1465,14 @@ def run_enrichment_pipeline():
     # Experimental keyword checks on Instagram
     scan_instagram_enrichment()
 
+def clamp_pct(val, min_val=-999.99, max_val=999.99):
+    """Clamps percentage value to fit within NUMERIC(5,2) or NUMERIC(10,2) boundaries to prevent overflow."""
+    try:
+        fval = float(val or 0.0)
+        return max(min_val, min(max_val, fval))
+    except (ValueError, TypeError):
+        return 0.00
+
 def calculate_momentum_score(wow_growth_pct, mom_growth_pct, total_growth_pct, trajectory="flat", total_features=0, total_shares=0, latest_listener_count=0, avg_growth_after_share_pct=0.0):
     wow = float(wow_growth_pct or 0)
     mom = float(mom_growth_pct or 0)
@@ -1710,46 +1718,66 @@ def recalculate_analytics_summary():
     share_history = {}     # band_lower -> list of dicts: {"week": str, "week_num": int, "created_at": str}
 
     try:
-        ws_res = supabase.table("weekly_submissions").select("band_name, week, shared, created_at").execute()
-        if ws_res.data:
-            for r in ws_res.data:
-                bname = r.get("band_name", "").strip().lower()
-                week = r.get("week")
-                is_shared = r.get("shared", False)
-                c_at = r.get("created_at", "")
-                if bname and week:
-                    if bname not in featured_history:
-                        featured_history[bname] = {"weeks": set()}
-                    featured_history[bname]["weeks"].add(week)
+        start = 0
+        page_size = 1000
+        all_ws = []
+        while True:
+            ws_res = supabase.table("weekly_submissions").select("band_name, week, shared, created_at").range(start, start + page_size - 1).execute()
+            if not ws_res.data:
+                break
+            all_ws.extend(ws_res.data)
+            if len(ws_res.data) < page_size:
+                break
+            start += page_size
 
-                    if is_shared:
-                        if bname not in share_history:
-                            share_history[bname] = []
-                        match = re.search(r"\d+", str(week))
-                        w_num = int(match.group(0)) if match else 0
-                        share_history[bname].append({
-                            "week": str(week),
-                            "week_num": w_num,
-                            "created_at": c_at
-                        })
+        for r in all_ws:
+            bname = r.get("band_name", "").strip().lower()
+            week = r.get("week")
+            is_shared = r.get("shared", False)
+            c_at = r.get("created_at", "")
+            if bname and week:
+                if bname not in featured_history:
+                    featured_history[bname] = {"weeks": set()}
+                featured_history[bname]["weeks"].add(week)
+
+                if is_shared:
+                    if bname not in share_history:
+                        share_history[bname] = []
+                    match = re.search(r"\d+", str(week))
+                    w_num = int(match.group(0)) if match else 0
+                    share_history[bname].append({
+                        "week": str(week),
+                        "week_num": w_num,
+                        "created_at": c_at
+                    })
     except Exception as e:
         print(f"Error reading weekly_submissions feature and share history: {e}")
 
     try:
-        ph_res = supabase.table("playlist_history").select("artist_name, added_at").execute()
-        if ph_res.data:
-            for r in ph_res.data:
-                bname = r.get("artist_name", "").strip().lower()
-                added_at = r.get("added_at")
-                if bname and added_at:
-                    try:
-                        dt = datetime.fromisoformat(added_at.replace("Z", "+00:00"))
-                        w_str = f"W{dt.isocalendar()[1]}"
-                    except Exception:
-                        w_str = f"W{datetime.now().isocalendar()[1]}"
-                    if bname not in featured_history:
-                        featured_history[bname] = {"weeks": set()}
-                    featured_history[bname]["weeks"].add(w_str)
+        start = 0
+        page_size = 1000
+        all_ph = []
+        while True:
+            ph_res = supabase.table("playlist_history").select("artist_name, added_at").range(start, start + page_size - 1).execute()
+            if not ph_res.data:
+                break
+            all_ph.extend(ph_res.data)
+            if len(ph_res.data) < page_size:
+                break
+            start += page_size
+
+        for r in all_ph:
+            bname = r.get("artist_name", "").strip().lower()
+            added_at = r.get("added_at")
+            if bname and added_at:
+                try:
+                    dt = datetime.fromisoformat(added_at.replace("Z", "+00:00"))
+                    w_str = f"W{dt.isocalendar()[1]}"
+                except Exception:
+                    w_str = f"W{datetime.now().isocalendar()[1]}"
+                if bname not in featured_history:
+                    featured_history[bname] = {"weeks": set()}
+                featured_history[bname]["weeks"].add(w_str)
     except Exception as e:
         print(f"Error reading playlist_history feature history: {e}")
 
@@ -1981,9 +2009,9 @@ def recalculate_analytics_summary():
             "first_snapshot_date": first_date_str if first_date_str else None,
             "latest_listener_count": latest_count,
             "latest_snapshot_date": latest_date_str if latest_date_str else None,
-            "week_over_week_growth_pct": float(wow_growth),
-            "month_over_month_growth_pct": float(mom_growth),
-            "total_growth_since_first_snapshot": float(total_growth),
+            "week_over_week_growth_pct": clamp_pct(wow_growth),
+            "month_over_month_growth_pct": clamp_pct(mom_growth),
+            "total_growth_since_first_snapshot": clamp_pct(total_growth),
             "momentum_score": momentum,
             "growth_trajectory": trajectory,
             "peak_listener_count": peak_count,
@@ -1997,23 +2025,27 @@ def recalculate_analytics_summary():
             "last_shared_week": last_shared_week,
             "listener_count_at_share": listener_count_at_share,
             "listener_count_1week_after_share": listener_count_1week_after_share,
-            "share_lift_pct": float(share_lift_pct),
+            "share_lift_pct": clamp_pct(share_lift_pct),
             "share_lift_absolute": share_lift_absolute,
-            "avg_growth_after_share_pct": float(avg_growth_after_share_pct),
+            "avg_growth_after_share_pct": clamp_pct(avg_growth_after_share_pct),
             "updated_at": datetime.now().isoformat()
         }
 
         summary_records.append(summary_payload)
 
     if summary_records:
-        try:
-            for rec in summary_records:
+        success_count = 0
+        error_count = 0
+        for rec in summary_records:
+            try:
                 supabase.table("band_analytics_summary").upsert(
                     rec, on_conflict="band_name"
                 ).execute()
-            print(f"Successfully upserted {len(summary_records)} band analytics summaries.")
-        except Exception as e:
-            print(f"Error upserting band_analytics_summary records: {e}")
+                success_count += 1
+            except Exception as e:
+                error_count += 1
+                print(f"Error upserting band_analytics_summary record for '{rec.get('band_name')}': {e}")
+        print(f"Successfully upserted {success_count}/{len(summary_records)} band analytics summaries (errors: {error_count}).")
 
 def main():
     parser = argparse.ArgumentParser(description="ConcertScout Ingest & Enrichment Pipeline")
