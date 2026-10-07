@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS band_registry (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     band_name VARCHAR UNIQUE NOT NULL,
     primary_genre VARCHAR,
+    genres TEXT[],
+    genres_checked_at TIMESTAMP WITH TIME ZONE,
+    banned BOOLEAN DEFAULT false,
     spotify_id VARCHAR,
     total_listeners INT DEFAULT 0,
     last_used_in_playlist VARCHAR,
@@ -83,7 +86,32 @@ CREATE TABLE IF NOT EXISTS playlist_history (
     tier TEXT NOT NULL,
     monthly_listeners BIGINT,
     release_date DATE,
-    added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_seen_on_playlist_at TIMESTAMP WITH TIME ZONE,
+    removal_type VARCHAR,
+    removal_detected_at TIMESTAMP WITH TIME ZONE
+);
+
+-- Banned Artists Table
+CREATE TABLE IF NOT EXISTS banned_artists (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    artist_id VARCHAR UNIQUE,
+    artist_name VARCHAR NOT NULL,
+    normalized_name VARCHAR NOT NULL,
+    reason VARCHAR NOT NULL DEFAULT 'manual_removal',
+    source_track_id VARCHAR,
+    banned_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    unbanned_at TIMESTAMP WITH TIME ZONE,
+    notes TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_banned_norm ON banned_artists (normalized_name);
+
+-- Candidate Artist Genre Cache Table
+CREATE TABLE IF NOT EXISTS artist_genre_cache (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    artist_id VARCHAR UNIQUE NOT NULL,
+    genres TEXT[],
+    checked_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Enable RLS on all tables
@@ -93,6 +121,21 @@ ALTER TABLE tour_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE artists ENABLE ROW LEVEL SECURITY;
 ALTER TABLE concerts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE playlist_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE banned_artists ENABLE ROW LEVEL SECURITY;
+ALTER TABLE artist_genre_cache ENABLE ROW LEVEL SECURITY;
+
+-- Security Policies for banned_artists (Read-only for anon role)
+DROP POLICY IF EXISTS "anon read banned_artists" ON banned_artists;
+CREATE POLICY "anon read banned_artists" ON banned_artists FOR SELECT USING (true);
+
+-- Security Policies for artist_genre_cache
+DROP POLICY IF EXISTS "Allow anon read artist_genre_cache" ON artist_genre_cache;
+DROP POLICY IF EXISTS "Allow anon insert artist_genre_cache" ON artist_genre_cache;
+DROP POLICY IF EXISTS "Allow anon update artist_genre_cache" ON artist_genre_cache;
+
+CREATE POLICY "Allow anon read artist_genre_cache" ON artist_genre_cache FOR SELECT USING (true);
+CREATE POLICY "Allow anon insert artist_genre_cache" ON artist_genre_cache FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow anon update artist_genre_cache" ON artist_genre_cache FOR UPDATE USING (true) WITH CHECK (true);
 
 -- Security Policies for weekly_submissions
 DROP POLICY IF EXISTS "Allow anon read weekly_submissions" ON weekly_submissions;
