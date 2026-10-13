@@ -407,16 +407,22 @@ class TestScoutV2(unittest.TestCase):
             m = MagicMock()
             if name == "weekly_submissions":
                 m.select.return_value.execute.return_value = mock_execute_ws
+                m.select.return_value.range.return_value.execute.return_value = mock_execute_ws
             elif name == "band_registry":
                 m.select.return_value.execute.return_value = mock_execute_br
+                m.select.return_value.range.return_value.execute.return_value = mock_execute_br
             elif name == "artists":
                 m.select.return_value.eq.return_value.execute.return_value = mock_execute_art
+                m.select.return_value.eq.return_value.range.return_value.execute.return_value = mock_execute_art
             elif name == "playlist_history":
                 m.select.return_value.execute.return_value = mock_execute_ph
+                m.select.return_value.range.return_value.execute.return_value = mock_execute_ph
             elif name == "band_analytics_summary":
                 m.select.return_value.execute.return_value = mock_execute_bas
+                m.select.return_value.range.return_value.execute.return_value = mock_execute_bas
             elif name == "band_listener_snapshot":
                 m.select.return_value.execute.return_value = mock_execute_bls
+                m.select.return_value.range.return_value.execute.return_value = mock_execute_bls
             elif name == "tour_events":
                 m.upsert.return_value.execute.return_value = MagicMock()
             return m
@@ -608,12 +614,16 @@ class TestScoutV2(unittest.TestCase):
             m = MagicMock()
             if name == "weekly_submissions":
                 m.select.return_value.execute.return_value = mock_ws_exec
+                m.select.return_value.range.return_value.execute.return_value = mock_ws_exec
             elif name == "band_registry":
                 m.select.return_value.execute.return_value = mock_br_exec
+                m.select.return_value.range.return_value.execute.return_value = mock_br_exec
             elif name == "playlist_history":
                 m.select.return_value.execute.return_value = mock_ph_exec
+                m.select.return_value.range.return_value.execute.return_value = mock_ph_exec
             elif name == "artists":
                 m.select.return_value.eq.return_value.execute.return_value = mock_art_exec
+                m.select.return_value.eq.return_value.range.return_value.execute.return_value = mock_art_exec
             elif name == "band_listener_snapshot":
                 def mock_upsert(payload, on_conflict=None):
                     upsert_calls.append((payload, on_conflict))

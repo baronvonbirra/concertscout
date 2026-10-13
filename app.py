@@ -133,6 +133,7 @@ import streamlit as st
 import textwrap
 import os
 import json
+import re
 from datetime import datetime, timedelta
 try:
     from supabase import create_client, Client, ClientOptions
@@ -150,10 +151,16 @@ st.set_page_config(page_title="PUNK-SCOUT V2.0", layout="wide")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
+def parse_week_num(w_str):
+    if not w_str or not isinstance(w_str, str):
+        return 0
+    match = re.search(r'\d+', w_str)
+    return int(match.group()) if match else 0
+
 class SimpleQueryBuilder:
     def __init__(self, url, headers, table_name):
         self.url = f"{url.rstrip('/')}/rest/v1/{table_name}"
-        self.headers = headers
+        self.headers = headers.copy()
         self.params = {}
 
     def select(self, columns="*"):
@@ -166,6 +173,11 @@ class SimpleQueryBuilder:
 
     def limit(self, count):
         self.params["limit"] = str(count)
+        return self
+
+    def range(self, start, end):
+        self.headers["Range-Unit"] = "items"
+        self.headers["Range"] = f"{start}-{end}"
         return self
 
     def eq(self, column, value):
@@ -218,42 +230,93 @@ def fetch_consolidated_data():
 
     try:
         today_str = datetime.now().date().isoformat()
+        page_size = 1000
 
         # Fetch tour_events for Phase 3 display
         tour_events = []
         try:
-            te_res = supabase.table("tour_events").select("*").gte("event_date", today_str).order("event_date", desc=False).execute()
-            tour_events = te_res.data if te_res.data else []
+            start = 0
+            while True:
+                te_res = supabase.table("tour_events").select("*").gte("event_date", today_str).order("event_date", desc=False).range(start, start + page_size - 1).execute()
+                data = te_res.data if te_res and hasattr(te_res, "data") and te_res.data else []
+                if not data:
+                    break
+                tour_events.extend(data)
+                if len(data) < page_size:
+                    break
+                start += page_size
         except Exception as te_e:
             print(f"Error fetching tour_events: {te_e}")
 
-        # Fetch weekly submissions for Phase 1 display
+        # Fetch weekly submissions for Phase 1 display with pagination
         weekly_submissions = []
         try:
-            ws_res = supabase.table("weekly_submissions").select("*").order("created_at", desc=True).limit(5000).execute()
-            weekly_submissions = ws_res.data if ws_res.data else []
+            start = 0
+            while True:
+                ws_res = supabase.table("weekly_submissions").select("*").order("created_at", desc=True).range(start, start + page_size - 1).execute()
+                data = ws_res.data if ws_res and hasattr(ws_res, "data") and ws_res.data else []
+                if not data:
+                    break
+                weekly_submissions.extend(data)
+                if len(data) < page_size:
+                    break
+                start += page_size
+
+            # Ensure consistent week-based sorting (highest week number first, then created_at desc)
+            weekly_submissions.sort(
+                key=lambda x: (parse_week_num(x.get("week")), x.get("created_at") or ""),
+                reverse=True
+            )
         except Exception as ws_e:
             print(f"Error fetching weekly_submissions: {ws_e}")
 
-        # Fetch analytics summary for Analytics Dashboard
+        # Fetch analytics summary for Analytics Dashboard with pagination
         analytics_summary = []
         try:
-            ans_res = supabase.table("band_analytics_summary").select("*").order("momentum_score", desc=True).limit(5000).execute()
-            analytics_summary = ans_res.data if ans_res.data else []
+            start = 0
+            while True:
+                ans_res = supabase.table("band_analytics_summary").select("*").order("momentum_score", desc=True).range(start, start + page_size - 1).execute()
+                data = ans_res.data if ans_res and hasattr(ans_res, "data") and ans_res.data else []
+                if not data:
+                    break
+                analytics_summary.extend(data)
+                if len(data) < page_size:
+                    break
+                start += page_size
         except Exception as ans_e:
             print(f"Error fetching band_analytics_summary: {ans_e}")
 
-        # Fetch listener snapshots for details modal
+        # Fetch listener snapshots for details modal with pagination
         listener_snapshots = []
         try:
-            snap_res = supabase.table("band_listener_snapshot").select("*").order("recorded_date", desc=True).limit(5000).execute()
-            listener_snapshots = snap_res.data if snap_res.data else []
+            start = 0
+            while True:
+                snap_res = supabase.table("band_listener_snapshot").select("*").order("recorded_date", desc=True).range(start, start + page_size - 1).execute()
+                data = snap_res.data if snap_res and hasattr(snap_res, "data") and snap_res.data else []
+                if not data:
+                    break
+                listener_snapshots.extend(data)
+                if len(data) < page_size:
+                    break
+                start += page_size
         except Exception as snap_e:
             print(f"Error fetching band_listener_snapshot: {snap_e}")
 
-        # Fetch concerts joined with artist details
-        res = supabase.table("concerts").select("*, artists(id, name, spotify_id, instagram_url, lastfm_url, source_playlist, is_active, last_instagram_post_id)").gte("event_date", today_str).execute()
-        concerts_list = res.data if res.data else []
+        # Fetch concerts joined with artist details with pagination
+        concerts_list = []
+        try:
+            start = 0
+            while True:
+                res = supabase.table("concerts").select("*, artists(id, name, spotify_id, instagram_url, lastfm_url, source_playlist, is_active, last_instagram_post_id)").gte("event_date", today_str).range(start, start + page_size - 1).execute()
+                data = res.data if res and hasattr(res, "data") and res.data else []
+                if not data:
+                    break
+                concerts_list.extend(data)
+                if len(data) < page_size:
+                    break
+                start += page_size
+        except Exception as c_e:
+            print(f"Error fetching concerts: {c_e}")
 
         consolidated = []
         for concert in concerts_list:
@@ -288,15 +351,36 @@ def fetch_consolidated_data():
 
             consolidated.append(merged)
 
-        # Fetch all active artists so users can scan their feeds/stories directly
-        art_res = supabase.table("artists").select("id, name, spotify_id, instagram_url, source_playlist, last_instagram_post_id").eq("is_active", True).execute()
-        active_artists = art_res.data if art_res.data else []
-
-        # Fetch weekly playlist additions from playlist_history (added in last 7 days)
-        seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
+        # Fetch all active artists with pagination
+        active_artists = []
         try:
-            pl_res = supabase.table("playlist_history").select("*").gte("added_at", seven_days_ago).order("added_at", desc=True).execute()
-            weekly_playlist = pl_res.data if pl_res.data else []
+            start = 0
+            while True:
+                art_res = supabase.table("artists").select("id, name, spotify_id, instagram_url, source_playlist, last_instagram_post_id").eq("is_active", True).range(start, start + page_size - 1).execute()
+                data = art_res.data if art_res and hasattr(art_res, "data") and art_res.data else []
+                if not data:
+                    break
+                active_artists.extend(data)
+                if len(data) < page_size:
+                    break
+                start += page_size
+        except Exception as art_e:
+            print(f"Error fetching active artists: {art_e}")
+
+        # Fetch weekly playlist additions from playlist_history (added in last 7 days) with pagination
+        seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
+        weekly_playlist = []
+        try:
+            start = 0
+            while True:
+                pl_res = supabase.table("playlist_history").select("*").gte("added_at", seven_days_ago).order("added_at", desc=True).range(start, start + page_size - 1).execute()
+                data = pl_res.data if pl_res and hasattr(pl_res, "data") and pl_res.data else []
+                if not data:
+                    break
+                weekly_playlist.extend(data)
+                if len(data) < page_size:
+                    break
+                start += page_size
         except Exception as pe:
             print(f"Error fetching playlist history for UI: {pe}")
             weekly_playlist = []

@@ -682,13 +682,24 @@ def select_weekly_playlist_tracks(candidates, existing_playlist_artists=None, ex
 
         # Fetch taste overlap genres from high interaction weekly submissions
         try:
-            ws_res = supabase.table("weekly_submissions").select("band_name").gte("interaction_score", 2).execute()
-            if ws_res.data:
-                high_bands = {r["band_name"].lower() for r in ws_res.data if r.get("band_name")}
-                for hb in high_bands:
-                    if hb in band_registry_map and band_registry_map[hb].get("genres"):
-                        for g in band_registry_map[hb]["genres"]:
-                            user_engaged_genres.add(g.lower())
+            start = 0
+            page_size = 1000
+            all_ws_high = []
+            while True:
+                ws_res = supabase.table("weekly_submissions").select("band_name").gte("interaction_score", 2).range(start, start + page_size - 1).execute()
+                data = ws_res.data if ws_res and hasattr(ws_res, "data") and ws_res.data else []
+                if not data:
+                    break
+                all_ws_high.extend(data)
+                if len(data) < page_size:
+                    break
+                start += page_size
+
+            high_bands = {r["band_name"].lower() for r in all_ws_high if r.get("band_name")}
+            for hb in high_bands:
+                if hb in band_registry_map and band_registry_map[hb].get("genres"):
+                    for g in band_registry_map[hb]["genres"]:
+                        user_engaged_genres.add(g.lower())
         except Exception as e:
             print(f"Error querying weekly_submissions taste overlap: {e}")
 
@@ -1736,11 +1747,19 @@ def track_tour_events():
         band_names = set()
 
         try:
-            ws_res = supabase.table("weekly_submissions").select("band_name").execute()
-            if ws_res.data:
-                for r in ws_res.data:
+            start = 0
+            page_size = 1000
+            while True:
+                ws_res = supabase.table("weekly_submissions").select("band_name").range(start, start + page_size - 1).execute()
+                data = ws_res.data if ws_res and hasattr(ws_res, "data") and ws_res.data else []
+                if not data:
+                    break
+                for r in data:
                     if r.get("band_name"):
                         band_names.add(r["band_name"].strip())
+                if len(data) < page_size:
+                    break
+                start += page_size
         except Exception as ws_e:
             print(f"Error reading weekly_submissions for tour scraping: {ws_e}")
 
@@ -2045,12 +2064,20 @@ def take_band_listener_snapshots():
 
     # 1. Collect unique bands from weekly_submissions
     try:
-        ws_res = supabase.table("weekly_submissions").select("band_name").execute()
-        if ws_res.data:
-            for r in ws_res.data:
+        start = 0
+        page_size = 1000
+        while True:
+            ws_res = supabase.table("weekly_submissions").select("band_name").range(start, start + page_size - 1).execute()
+            data = ws_res.data if ws_res and hasattr(ws_res, "data") and ws_res.data else []
+            if not data:
+                break
+            for r in data:
                 bname = r.get("band_name", "").strip()
                 if bname and bname.lower() not in band_map:
                     band_map[bname.lower()] = {"band_name": bname, "spotify_id": None}
+            if len(data) < page_size:
+                break
+            start += page_size
     except Exception as e:
         print(f"Error reading weekly_submissions for snapshot: {e}")
 
