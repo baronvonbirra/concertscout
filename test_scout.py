@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import scout
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class TestScoutV2(unittest.TestCase):
 
@@ -46,16 +46,17 @@ class TestScoutV2(unittest.TestCase):
 
     @patch('scout.requests.get')
     def test_get_tours_bandsintown(self, mock_get):
+        future_date_str = (datetime.now() + timedelta(days=10)).strftime("%Y-%m-%d")
         mock_res = MagicMock()
         mock_res.status_code = 200
         mock_res.json.return_value = [
             {
-                "datetime": "2026-10-15T20:00:00",
+                "datetime": f"{future_date_str}T20:00:00",
                 "venue": {"name": "Wurlitzer Ballroom", "city": "Madrid", "country": "Spain"},
                 "offers": [{"url": "https://tickets.example.com/show"}]
             },
             {
-                "datetime": "2026-10-20T20:00:00",
+                "datetime": f"{future_date_str}T20:00:00",
                 "venue": {"name": "O2 Arena", "city": "London", "country": "United Kingdom"},
                 "offers": []
             }
@@ -67,7 +68,7 @@ class TestScoutV2(unittest.TestCase):
         self.assertEqual(events[0]["band_name"], "HAWXX")
         self.assertEqual(events[0]["city"], "Madrid")
         self.assertEqual(events[0]["venue"], "Wurlitzer Ballroom")
-        self.assertEqual(events[0]["event_date"], "2026-10-15")
+        self.assertEqual(events[0]["event_date"], future_date_str)
         self.assertEqual(events[0]["country"], "ES")
         self.assertEqual(events[0]["ticket_url"], "https://tickets.example.com/show")
 

@@ -742,6 +742,177 @@ def main():
             subNotes: '',
             bulkCsv: '',
             bulkMode: false,
+            retrievingWeeks: false,
+            retrieveWeeksMsg: '',
+
+            getWeekNumFromDate(dateStr) {
+                if (!dateStr) return null;
+                const d = new Date(dateStr);
+                if (isNaN(d.getTime())) return null;
+                d.setHours(0, 0, 0, 0);
+                d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+                const w1 = new Date(d.getFullYear(), 0, 4);
+                return 'W' + (1 + Math.round(((d.getTime() - w1.getTime()) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7));
+            },
+
+            async retrieveMissingWeeks() {
+                this.retrievingWeeks = true;
+                this.retrieveWeeksMsg = 'Scanning history & snapshots for missing week logs...';
+
+                const existingKeys = new Set();
+                for (let sub of this.weeklySubmissions) {
+                    if (sub.band_name && sub.week) {
+                        existingKeys.add(sub.band_name.trim().toLowerCase() + '_' + sub.week.trim().toUpperCase());
+                    }
+                }
+
+                const missingCandidatesMap = new Map();
+
+                const addMissingCandidate = (bandName, weekStr, noteReason) => {
+                    if (!bandName || !weekStr) return;
+                    const bClean = bandName.trim();
+                    const wClean = weekStr.trim().toUpperCase();
+                    if (!bClean || !wClean.startsWith('W')) return;
+                    const key = bClean.toLowerCase() + '_' + wClean;
+                    if (!existingKeys.has(key) && !missingCandidatesMap.has(key)) {
+                        missingCandidatesMap.set(key, {
+                            band_name: bClean,
+                            week: wClean,
+                            reason: noteReason
+                        });
+                    }
+                };
+
+                // 1. Scan playlist history
+                for (let pl of this.weeklyPlaylist) {
+                    const bName = pl.artist_name;
+                    const wStr = this.getWeekNumFromDate(pl.added_at);
+                    if (bName && wStr) {
+                        addMissingCandidate(bName, wStr, 'Retrieved from playlist history');
+                    }
+                }
+
+                // 2. Scan listener snapshots
+                for (let snap of this.listenerSnapshots) {
+                    const bName = snap.band_name;
+                    const wStr = snap.snapshot_week || this.getWeekNumFromDate(snap.recorded_date);
+                    if (bName && wStr) {
+                        addMissingCandidate(bName, wStr, 'Retrieved from listener snapshot');
+                    }
+                }
+
+                // 3. Scan analytics summary
+                for (let summary of this.analyticsSummary) {
+                    const bName = summary.band_name;
+                    if (summary.first_featured_week) {
+                        addMissingCandidate(bName, summary.first_featured_week, 'Retrieved from analytics first featured week');
+                    }
+                    if (summary.last_featured_week) {
+                        addMissingCandidate(bName, summary.last_featured_week, 'Retrieved from analytics last featured week');
+                    }
+                    if (summary.last_shared_week) {
+                        addMissingCandidate(bName, summary.last_shared_week, 'Retrieved from analytics last shared week');
+                    }
+                }
+
+                const missingCandidates = Array.from(missingCandidatesMap.values());
+
+                if (missingCandidates.length === 0) {
+                    this.retrievingWeeks = false;
+                    this.retrieveWeeksMsg = 'All featured weeks and band logs are up to date! No missing entries found.';
+                    return;
+                }
+
+                this.retrieveWeeksMsg = 'Found ' + missingCandidates.length + ' missing week log(s). Saving to database...';
+
+                const items = [];
+                const bandRegistryItems = [];
+
+                for (let cand of missingCandidates) {
+                    const decision = this.getBandShareDecision(cand.band_name);
+                    items.push({
+                        week: cand.week,
+                        band_name: cand.band_name,
+                        direct_views: 0,
+                        indirect_views: 0,
+                        total_saves: 0,
+                        interaction_type: 'none',
+                        interaction_score: 0,
+                        shared: false,
+                        share_recommendation: decision.recommendation,
+                        notes: cand.reason
+                    });
+
+                    bandRegistryItems.push({
+                        band_name: cand.band_name,
+                        last_used_in_playlist: cand.week
+                    });
+                }
+
+                // Deduplicate registry items by band_name
+                const uniqueRegistryMap = new Map();
+                for (let item of bandRegistryItems) {
+                    uniqueRegistryMap.set(item.band_name.toLowerCase(), item);
+                }
+                const deduplicatedRegistryItems = Array.from(uniqueRegistryMap.values());
+
+                try {
+                    let res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
+                        method: 'POST',
+                        headers: {
+                            'apikey': '__SUPABASE_KEY__',
+                            'Authorization': 'Bearer __SUPABASE_KEY__',
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(items)
+                    });
+
+                    if (!res.ok) {
+                        const errData = await res.json().catch(() => ({}));
+                        const errStr = JSON.stringify(errData);
+                        if (errStr.includes('share_recommendation')) {
+                            const fallbackItems = items.map(item => {
+                                const copy = { ...item };
+                                delete copy.share_recommendation;
+                                return copy;
+                            });
+                            res = await fetch('__SUPABASE_URL__/rest/v1/weekly_submissions', {
+                                method: 'POST',
+                                headers: {
+                                    'apikey': '__SUPABASE_KEY__',
+                                    'Authorization': 'Bearer __SUPABASE_KEY__',
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify(fallbackItems)
+                            });
+                        }
+                    }
+
+                    if (!res.ok) {
+                        const errData = await res.json().catch(() => ({}));
+                        throw new Error(errData.message || 'Failed to insert retrieved missing week logs');
+                    }
+
+                    // Upsert into band_registry
+                    await fetch('__SUPABASE_URL__/rest/v1/band_registry?on_conflict=band_name', {
+                        method: 'POST',
+                        headers: {
+                            'apikey': '__SUPABASE_KEY__',
+                            'Authorization': 'Bearer __SUPABASE_KEY__',
+                            'Content-Type': 'application/json',
+                            'Prefer': 'resolution=merge-duplicates'
+                        },
+                        body: JSON.stringify(deduplicatedRegistryItems)
+                    }).catch(() => {});
+
+                    this.retrievingWeeks = false;
+                    this.retrieveWeeksMsg = 'Success! Retrieved and saved ' + missingCandidates.length + ' missing week log(s). Reloading...';
+                    setTimeout(() => this.forceRefresh(), 1200);
+                } catch (e) {
+                    this.retrievingWeeks = false;
+                    this.retrieveWeeksMsg = 'Error retrieving missing weeks: ' + e.message;
+                }
+            },
 
             verifyAdminPassword() {
                 if (this.adminPasswordInput.trim() === 'punk2026' || window.location.search.includes('pwd=punk2026')) {
@@ -1514,7 +1685,19 @@ def main():
 
                     <!-- Submission Log Table -->
                     <div class="brutal-card p-6 bg-white text-black overflow-x-auto">
-                        <h3 class="bebas text-3xl mb-4 border-b-4 border-black pb-2 uppercase">RECENT SUBMISSIONS LOG</h3>
+                        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 border-b-4 border-black pb-2 gap-2">
+                            <h3 class="bebas text-3xl uppercase leading-none">RECENT SUBMISSIONS LOG</h3>
+                            <button @click="retrieveMissingWeeks()" :disabled="retrievingWeeks"
+                                    class="bg-black text-[#CCFF00] hover:bg-[#CCFF00] hover:text-black font-bold px-3 py-1.5 mono text-xs border-2 border-black transition-all uppercase flex items-center gap-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                                <span x-show="retrievingWeeks" class="animate-spin inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full"></span>
+                                <span x-text="retrievingWeeks ? 'RETRIEVING WEEKS...' : '🔄 RETRIEVE MISSING WEEKS'"></span>
+                            </button>
+                        </div>
+
+                        <template x-if="retrieveWeeksMsg">
+                            <div class="mb-4 p-2.5 bg-yellow-100 border-2 border-black mono text-xs font-bold text-black" x-text="retrieveWeeksMsg"></div>
+                        </template>
+
                         <table class="w-full text-left border-collapse mono text-xs">
                             <thead>
                                 <tr class="bg-black text-white">
