@@ -783,7 +783,7 @@ def main():
                     }
                 };
 
-                // 1. Scan playlist history
+                // 1. Scan playlist history for featured tracks
                 for (let pl of this.weeklyPlaylist) {
                     const bName = pl.artist_name;
                     const wStr = this.getWeekNumFromDate(pl.added_at);
@@ -792,16 +792,7 @@ def main():
                     }
                 }
 
-                // 2. Scan listener snapshots
-                for (let snap of this.listenerSnapshots) {
-                    const bName = snap.band_name;
-                    const wStr = snap.snapshot_week || this.getWeekNumFromDate(snap.recorded_date);
-                    if (bName && wStr) {
-                        addMissingCandidate(bName, wStr, 'Retrieved from listener snapshot');
-                    }
-                }
-
-                // 3. Scan analytics summary
+                // 2. Scan analytics summary for explicit featured weeks
                 for (let summary of this.analyticsSummary) {
                     const bName = summary.band_name;
                     if (summary.first_featured_week) {
@@ -809,9 +800,6 @@ def main():
                     }
                     if (summary.last_featured_week) {
                         addMissingCandidate(bName, summary.last_featured_week, 'Retrieved from analytics last featured week');
-                    }
-                    if (summary.last_shared_week) {
-                        addMissingCandidate(bName, summary.last_shared_week, 'Retrieved from analytics last shared week');
                     }
                 }
 
