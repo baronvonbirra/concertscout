@@ -487,6 +487,15 @@ def main():
             weeklyPlaylist: window.concertData.weekly_playlist || [],
             tourEvents: window.concertData.tour_events || [],
             weeklySubmissions: window.concertData.weekly_submissions || [],
+
+            get filteredWeeklySubmissions() {
+                return this.weeklySubmissions.filter(sub => {
+                    if (sub.notes && sub.notes.toLowerCase().includes('retrieved from')) {
+                        return false;
+                    }
+                    return true;
+                });
+            },
             analyticsSummary: window.concertData.analytics_summary || [],
             listenerSnapshots: window.concertData.listener_snapshots || [],
 
@@ -783,23 +792,12 @@ def main():
                     }
                 };
 
-                // 1. Scan playlist history for featured tracks
+                // Scan playlist history for featured tracks
                 for (let pl of this.weeklyPlaylist) {
                     const bName = pl.artist_name;
                     const wStr = this.getWeekNumFromDate(pl.added_at);
                     if (bName && wStr) {
                         addMissingCandidate(bName, wStr, 'Retrieved from playlist history');
-                    }
-                }
-
-                // 2. Scan analytics summary for explicit featured weeks
-                for (let summary of this.analyticsSummary) {
-                    const bName = summary.band_name;
-                    if (summary.first_featured_week) {
-                        addMissingCandidate(bName, summary.first_featured_week, 'Retrieved from analytics first featured week');
-                    }
-                    if (summary.last_featured_week) {
-                        addMissingCandidate(bName, summary.last_featured_week, 'Retrieved from analytics last featured week');
                     }
                 }
 
@@ -1700,7 +1698,7 @@ def main():
                                 </tr>
                             </thead>
                             <tbody>
-                                <template x-for="sub in weeklySubmissions" :key="sub.id">
+                                <template x-for="sub in filteredWeeklySubmissions" :key="sub.id || sub.week + '_' + sub.band_name">
                                     <tr class="hover:bg-yellow-50">
                                         <td class="p-2 border border-black font-bold" x-text="sub.week"></td>
                                         <td class="p-2 border border-black" x-text="sub.band_name"></td>
